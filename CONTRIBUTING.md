@@ -330,7 +330,23 @@ mypy src/
 
 ---
 
-## 📝 Notas Finais
+## � Licenciamento
+
+### Concordância com a Licença
+Ao contribuir com este projeto, você concorda que suas contribuições serão licenciadas sob a mesma [Licença MIT](LICENSE) do projeto.
+
+### O que isso significa:
+- ✅ Suas contribuições podem ser usadas comercialmente
+- ✅ Podem ser modificadas e redistribuídas
+- ✅ Você mantém o copyright de suas contribuições originais
+- ⚠️ Você garante que tem direito de licenciar suas contribuições
+
+### CLA (Contributor License Agreement)
+Não é necessário assinar um CLA separado. A licença MIT é suficiente e clara sobre os direitos e responsabilidades.
+
+---
+
+## �📝 Notas Finais
 
 - **Seja respeitoso** com outros contribuidores
 - **Mantenha discussões construtivas** em issues e PRs
