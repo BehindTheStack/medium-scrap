@@ -3,25 +3,41 @@
 # Usage: python main.py --config-source <source_name>
 
 sources:
-  # Technology & Engineering
-  engineering:
+  # Technology & Engineering - Baseado no seu histórico
+  netflix:
     type: publication
-    name: freecodecamp
-    description: "FreeCodeCamp - Programming tutorials and tips"
+    name: netflix
+    description: "Netflix Technology Blog"
     auto_discover: true
+    custom_domain: false
+    
+  wise:
+    type: publication
+    name: wise-engineering
+    description: "Wise Engineering - Fintech and money transfer technology"
+    auto_discover: true
+    custom_domain: false
+    
+  tinder:
+    type: publication
+    name: tinder
+    description: "Tinder Engineering - Dating app technology"
+    auto_discover: true
+    custom_domain: false
     
   skyscanner:
     type: username  
     name: "@SkyscannerEng"
     description: "Skyscanner Engineering - Travel tech insights"
     auto_discover: true
+    custom_domain: false
     
-  netflix:
+  airbnb:
     type: publication
-    name: netflix
-    description: "Netflix Technology Blog"
+    name: airbnb-engineering
+    description: "Airbnb Engineering & Data Science"
     auto_discover: true
-    custom_domain: true
+    custom_domain: false
     
   kickstarter:
     type: publication
@@ -30,17 +46,55 @@ sources:
     auto_discover: true
     custom_domain: true
     
-  airbnb:
+  lyft:
     type: publication
-    name: airbnb-engineering
-    description: "Airbnb Engineering & Data Science"
+    name: eng.lyft.com
+    description: "Lyft Engineering - Ridesharing technology"
     auto_discover: true
+    custom_domain: true
+    
+  medium:
+    type: publication
+    name: medium.engineering
+    description: "Medium Engineering - Platform and publishing technology"
+    auto_discover: true
+    custom_domain: true
+    
+  nytimes:
+    type: publication
+    name: open.nytimes.com
+    description: "New York Times Open - News technology and journalism"
+    auto_discover: true
+    custom_domain: true
+    
+  olx:
+    type: publication
+    name: tech.olx.com
+    description: "OLX Technology - Classifieds and marketplace tech"
+    auto_discover: true
+    custom_domain: true
+    
+  deezer:
+    type: publication
+    name: deezer.io
+    description: "Deezer Engineering - Music streaming technology"
+    auto_discover: true
+    custom_domain: true
+    
+  # Additional Tech Companies
+  engineering:
+    type: publication
+    name: freecodecamp
+    description: "FreeCodeCamp - Programming tutorials and tips"
+    auto_discover: true
+    custom_domain: false
     
   uber:
     type: publication
     name: uber-engineering
     description: "Uber Engineering Blog"
     auto_discover: true
+    custom_domain: false
     
   # Startups & Business
   startup:
@@ -48,12 +102,14 @@ sources:
     name: hackernoon
     description: "Hacker Noon - Tech stories and tutorials"
     auto_discover: true
+    custom_domain: false
     
   medium-staff:
     type: publication
     name: medium-staff
     description: "Official Medium Staff picks"
     auto_discover: true
+    custom_domain: false
     
   # Data Science & AI
   towards-data-science:
@@ -61,6 +117,7 @@ sources:
     name: towards-data-science
     description: "Towards Data Science - ML, AI, and Data insights"
     auto_discover: true
+    custom_domain: false
     
   # Design & UX
   ux-design:
@@ -68,6 +125,7 @@ sources:
     name: ux-design
     description: "UX Design - User experience articles"
     auto_discover: true
+    custom_domain: false
     
   # Individual Users Examples
   tinder-eng:
@@ -75,14 +133,7 @@ sources:
     name: "@TinderEng"
     description: "Tinder Engineering Team"
     auto_discover: true
-    
-  # Custom domains (examples)
-  custom-domain-example:
-    type: publication
-    name: blog.example.com
-    description: "Custom domain publication example"
-    auto_discover: false
-    custom_domain: true
+    custom_domain: false
 
 # Default settings that apply to all sources unless overridden
 defaults:
@@ -94,12 +145,39 @@ defaults:
 # Bulk operations - collect from multiple sources at once  
 bulk_collections:
   tech_giants:
-    description: "All major tech company blogs"
+    description: "All major tech company blogs - baseado no seu histórico"
     sources:
       - netflix
       - airbnb
       - uber
+      - lyft
+      - wise
+      - tinder
       - skyscanner
+      
+  custom_domains:
+    description: "All custom domain publications you tested"
+    sources:
+      - kickstarter
+      - lyft
+      - medium
+      - nytimes
+      - olx
+      - deezer
+      
+  fintech_and_commerce:
+    description: "Financial technology and e-commerce"
+    sources:
+      - wise
+      - olx
+      - tinder
+      
+  media_and_content:
+    description: "Media, content and publishing platforms"
+    sources:
+      - medium
+      - nytimes
+      - deezer
       
   data_science:
     description: "Data Science and AI focused content"
