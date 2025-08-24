@@ -23,6 +23,13 @@ sources:
     auto_discover: true
     custom_domain: true
     
+  kickstarter:
+    type: publication
+    name: kickstarter.engineering
+    description: "Kickstarter Engineering - Building crowdfunding technology"
+    auto_discover: true
+    custom_domain: true
+    
   airbnb:
     type: publication
     name: airbnb-engineering
