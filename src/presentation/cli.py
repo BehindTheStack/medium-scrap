@@ -5,6 +5,7 @@ Following MVC pattern and Dependency Injection
 
 import json
 import click
+from pathlib import Path
 from typing import List, Optional
 from rich.console import Console
 from rich.table import Table
@@ -14,6 +15,7 @@ from ..application.use_cases.scrape_posts import (
     ScrapePostsUseCase, ScrapePostsRequest, ScrapePostsResponse
 )
 from ..domain.entities.publication import Post
+from ..infrastructure.config.source_manager import SourceConfigManager
 
 
 class PostFormatter:
@@ -69,6 +71,117 @@ class CLIController:
         self._scrape_posts_use_case = scrape_posts_use_case
         self._formatter = PostFormatter()
         self.console = Console()
+        self._config_manager = SourceConfigManager()
+    
+    def list_sources(self) -> None:
+        """List all available configured sources"""
+        sources = self._config_manager.list_sources()
+        bulk_collections = self._config_manager.list_bulk_collections()
+        
+        # Sources table
+        table = Table(title="📚 Available Medium Sources")
+        table.add_column("Key", style="cyan", no_wrap=True)
+        table.add_column("Type", style="green")
+        table.add_column("Name", style="magenta")
+        table.add_column("Description", style="dim")
+        
+        for key, source in sources.items():
+            table.add_row(key, source.type, source.name, source.description)
+        
+        self.console.print(table)
+        self.console.print()
+        
+        # Bulk collections table
+        if bulk_collections:
+            bulk_table = Table(title="📦 Bulk Collections")
+            bulk_table.add_column("Key", style="cyan", no_wrap=True)  
+            bulk_table.add_column("Description", style="magenta")
+            bulk_table.add_column("Sources", style="dim")
+            
+            for key, bulk in bulk_collections.items():
+                sources_list = ", ".join(bulk.sources)
+                bulk_table.add_row(key, bulk.description, sources_list)
+            
+            self.console.print(bulk_table)
+    
+    def scrape_from_config(
+        self,
+        source_key: str,
+        limit: Optional[int] = None,
+        format_type: str = "table", 
+        output_file: Optional[str] = None,
+        all_posts: bool = False
+    ) -> None:
+        """Scrape posts using a configured source"""
+        try:
+            source_config = self._config_manager.get_source(source_key)
+            defaults = self._config_manager.get_defaults()
+            
+            # Apply defaults if not specified
+            if limit is None and not all_posts:
+                limit = defaults.get('limit', 50)
+            
+            # Determine output file if not specified
+            if output_file is None and format_type == 'json':
+                output_dir = Path(defaults.get('output_dir', 'outputs'))
+                output_dir.mkdir(exist_ok=True)
+                output_file = str(output_dir / f"{source_key}_posts.json")
+            
+            # Show source info
+            self.console.print(f"[bold green]📖 Using configured source:[/bold green] {source_key}")
+            self.console.print(f"[dim]{source_config.description}[/dim]")
+            self.console.print()
+            
+            # Execute scraping
+            self.scrape_posts(
+                publication=source_config.get_publication_name(),
+                limit=None if all_posts else limit,
+                format_type=format_type,
+                custom_ids=None,
+                auto_discover=source_config.auto_discover,
+                skip_session=defaults.get('skip_session', True),
+                output_file=output_file
+            )
+            
+        except KeyError as e:
+            self.console.print(f"[red]❌ {e}[/red]")
+            self.console.print("[yellow]💡 Use --list-sources to see available sources[/yellow]")
+    
+    def scrape_bulk_collection(
+        self,
+        bulk_key: str,
+        limit: Optional[int] = None,
+        format_type: str = "json"
+    ) -> None:
+        """Scrape posts from multiple sources in a bulk collection"""
+        try:
+            bulk_config = self._config_manager.get_bulk_config(bulk_key)
+            defaults = self._config_manager.get_defaults()
+            
+            if limit is None:
+                limit = defaults.get('limit', 50)
+            
+            self.console.print(f"[bold blue]📦 Bulk Collection:[/bold blue] {bulk_key}")
+            self.console.print(f"[dim]{bulk_config.description}[/dim]")
+            self.console.print(f"[dim]Sources: {len(bulk_config.sources)}[/dim]")
+            self.console.print()
+            
+            output_dir = Path(defaults.get('output_dir', 'outputs'))
+            output_dir.mkdir(exist_ok=True)
+            
+            for source_key in bulk_config.sources:
+                self.console.print(f"[blue]📥 Collecting from:[/blue] {source_key}")
+                self.scrape_from_config(
+                    source_key=source_key,
+                    limit=limit,
+                    format_type=format_type,
+                    output_file=str(output_dir / f"{source_key}_posts.json")
+                )
+                self.console.print()
+                
+        except KeyError as e:
+            self.console.print(f"[red]❌ {e}[/red]")
+            self.console.print("[yellow]💡 Use --list-sources to see available bulk collections[/yellow]")
     
     def scrape_posts(
         self,
@@ -184,8 +297,10 @@ class CLIController:
 
 # CLI Command Interface
 @click.command()
-@click.option('--publication', '-p', default='netflix', 
-              help='Publication name (netflix, pinterest, or any publication)')
+@click.option('--publication', '-p', help='Publication name (netflix, pinterest, or any publication)')
+@click.option('--source', '-s', help='Use configured source from YAML (e.g., --source netflix)')
+@click.option('--bulk', '-b', help='Run bulk collection (e.g., --bulk tech_giants)')
+@click.option('--list-sources', is_flag=True, help='List all available configured sources')
 @click.option('--output', '-o', help='Output file for saving results')
 @click.option('--format', '-f', 'format_type', type=click.Choice(['table', 'json', 'ids']), 
               default='table', help='Output format')
@@ -195,7 +310,7 @@ class CLIController:
 @click.option('--all', 'all_posts', is_flag=True, help='Collect ALL posts from publication (no limit)')
 @click.option('--auto-discover', is_flag=True, 
               help='Force auto-discovery mode (production ready)')
-def cli(publication, output, format_type, custom_ids, skip_session, limit, all_posts, auto_discover):
+def cli(publication, source, bulk, list_sources, output, format_type, custom_ids, skip_session, limit, all_posts, auto_discover):
     """
     Universal Medium Scraper - Enterprise Edition
     
@@ -204,28 +319,39 @@ def cli(publication, output, format_type, custom_ids, skip_session, limit, all_p
     Examples:
     
     \b
-    # Quick scrape with fallback
-    python -m src.main --publication netflix --limit 5
+    # Quick scrape with fallback  
+    python main.py --publication netflix --limit 5
     
     \b
     # Production auto-discovery mode
-    python -m src.main --publication pinterest --auto-discover --skip-session --format json
+    python main.py --publication pinterest --auto-discover --skip-session --format json
+    
+    \b
+    # Use configured source
+    python main.py --source netflix --limit 10
+    
+    \b
+    # Use username from config
+    python main.py --source skyscanner --all --format json
+    
+    \b 
+    # Bulk collection from multiple sources
+    python main.py --bulk tech_giants --limit 20
+    
+    \b
+    # List all available sources
+    python main.py --list-sources
     
     \b
     # Custom post IDs
-    python -m src.main --publication netflix --custom-ids "ac15cada49ef,64c786c2a3ac"
+    python main.py --publication netflix --custom-ids "ac15cada49ef,64c786c2a3ac"
     
     \b
     # Collect ALL posts from publication
-    python -m src.main --publication netflix --all --skip-session --format json --output all_posts.json
+    python main.py --publication netflix --all --skip-session --format json --output all_posts.json
     """
-    # Handle --all flag
-    if all_posts:
-        limit = None
-        auto_discover = True  # Force auto-discover for complete collection
-        click.echo("🌟 Collecting ALL posts from publication (this may take a while)...")
     
-    # Dependency injection setup (would normally be in a container)
+    # Create controller first for potential source listing
     from ..infrastructure.adapters.medium_api_adapter import MediumApiAdapter
     from ..infrastructure.external.repositories import InMemoryPublicationRepository, MediumSessionRepository
     from ..domain.services.publication_service import PostDiscoveryService, PublicationConfigService
@@ -244,8 +370,46 @@ def cli(publication, output, format_type, custom_ids, skip_session, limit, all_p
         session_repository
     )
     
-    # Create controller and execute
     controller = CLIController(scrape_posts_use_case)
+    
+    # Handle source listing
+    if list_sources:
+        controller.list_sources()
+        return
+        
+    # Handle bulk collection
+    if bulk:
+        controller.scrape_bulk_collection(
+            bulk_key=bulk,
+            limit=limit,
+            format_type=format_type
+        )
+        return
+    
+    # Handle configured source
+    if source:
+        controller.scrape_from_config(
+            source_key=source,
+            limit=limit,
+            format_type=format_type,
+            output_file=output,
+            all_posts=all_posts
+        )
+        return
+    
+    # Require publication if not using source or bulk
+    if not publication:
+        click.echo("❌ Error: Must specify --publication, --source, or --bulk")
+        click.echo("💡 Use --list-sources to see available configured sources")
+        return
+    
+    # Handle --all flag
+    if all_posts:
+        limit = None
+        auto_discover = True  # Force auto-discover for complete collection
+        click.echo("🌟 Collecting ALL posts from publication (this may take a while)...")
+    
+    # Execute traditional publication scraping
     controller.scrape_posts(
         publication=publication,
         limit=limit,
