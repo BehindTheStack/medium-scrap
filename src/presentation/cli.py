@@ -352,85 +352,80 @@ class CLIController:
     
     def _execute_with_progress(self, request: ScrapePostsRequest, skip_session: bool) -> ScrapePostsResponse:
         """Execute use case with enhanced progress indication"""
-        if skip_session:
-            # Start enhanced progress display
-            with Progress(
-                SpinnerColumn(style="cyan"),
-                TextColumn("[bold blue]{task.description}"),
-                BarColumn(complete_style="green", finished_style="green"),
-                TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-                TimeElapsedColumn(),
-                console=self.console,
-                transient=False
-            ) as progress:
-                
-                # Create main task
-                main_task = progress.add_task(
-                    f"🚀 Scraping: {request.publication_name}",
-                    total=100
-                )
-                
-                # Create phase task
-                phases = [
-                    "🔍 Resolving publication...",
-                    "🤖 Detecting publication type...", 
-                    "📡 Connecting to Medium API...",
-                    "🔎 Discovering posts...",
-                    "📝 Collecting post details...",
-                    "✨ Finalizing..."
-                ]
-                
-                phase_task = progress.add_task(
-                    phases[0],
-                    total=len(phases)
-                )
-                
-                # Simulate phases (in real implementation, this would be callbacks from use case)
-                for i, phase in enumerate(phases[:3]):  # Pre-execution phases
-                    progress.update(phase_task, completed=i, description=phase)
-                    progress.update(main_task, completed=(i * 15))
-                    time.sleep(0.2)  # Small delay to show progress
-                
-                # Execute the actual use case
-                progress.update(phase_task, completed=3, description="📡 Executing scraping...")
-                progress.update(main_task, completed=50)
-                
-                response = self._scrape_posts_use_case.execute(request)
-                
-                # Post-execution phases
-                for i, phase in enumerate(phases[4:], 4):
-                    progress.update(phase_task, completed=i, description=phase)
-                    progress.update(main_task, completed=70 + (i-3) * 15)
-                    time.sleep(0.1)
-                
-                # Final update
-                progress.update(
-                    main_task,
-                    completed=100,
-                    description=f"✅ Collected {response.total_posts_found} posts"
-                )
-                progress.update(phase_task, completed=len(phases), description="✨ Complete!")
-                
-                # Brief pause to show completion
-                time.sleep(0.5)
-                
-            return response
-        else:
-            # Session mode with simpler progress
-            self.console.print(f"[blue]🔄 Initializing session for {request.publication_name}...[/blue]")
+        
+        # Always use enhanced progress display (both session and skip-session modes)
+        with Progress(
+            SpinnerColumn(style="cyan"),
+            TextColumn("[bold blue]{task.description}"),
+            BarColumn(complete_style="green", finished_style="green"),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            TimeElapsedColumn(),
+            console=self.console,
+            transient=False
+        ) as progress:
             
-            with Progress(
-                SpinnerColumn(),
-                TextColumn("[blue]{task.description}"),
-                console=self.console,
-            ) as progress:
-                task = progress.add_task("Setting up session and collecting posts...", total=None)
-                response = self._scrape_posts_use_case.execute(request)
-                progress.update(task, description=f"Session complete - {response.total_posts_found} posts found")
+            # Create main task
+            mode_text = "Auto-Discovery" if skip_session else "Session"
+            main_task = progress.add_task(
+                f"🚀 {mode_text}: {request.publication_name}",
+                total=100
+            )
+            
+            # Create phase task
+            if skip_session:
+                phases = [
+                    ("🔍", "[cyan]Resolving publication...[/cyan]"),
+                    ("🤖", "[yellow]Auto-detecting type...[/yellow]"), 
+                    ("📡", "[blue]Connecting to Medium API...[/blue]"),
+                    ("🔎", "[magenta]Auto-discovering posts...[/magenta]"),
+                    ("📝", "[green]Collecting post details...[/green]"),
+                    ("✨", "[bright_green]Finalizing...[/bright_green]")
+                ]
+            else:
+                phases = [
+                    ("🔍", "[cyan]Resolving publication...[/cyan]"),
+                    ("🤖", "[yellow]Analyzing publication type...[/yellow]"), 
+                    ("🔄", "[blue]Initializing session...[/blue]"),
+                    ("🔎", "[magenta]Discovering posts...[/magenta]"),
+                    ("📝", "[green]Collecting post details...[/green]"),
+                    ("✨", "[bright_green]Processing data...[/bright_green]")
+                ]
+            
+            phase_task = progress.add_task(
+                f"{phases[0][0]} {phases[0][1]}",
+                total=len(phases)
+            )
+            
+            # Simulate pre-execution phases
+            for i, (emoji, phase_text) in enumerate(phases[:3]):
+                progress.update(phase_task, completed=i, description=f"{emoji} {phase_text}")
+                progress.update(main_task, completed=(i * 15))
+                time.sleep(0.4)  # Slightly longer to show each phase
+            
+            # Execute the actual use case
+            progress.update(phase_task, completed=3, description="📡 [bold blue]Executing scraping...[/bold blue]")
+            progress.update(main_task, completed=50)
+            
+            response = self._scrape_posts_use_case.execute(request)
+            
+            # Post-execution phases
+            for i, (emoji, phase_text) in enumerate(phases[4:], 4):
+                progress.update(phase_task, completed=i, description=f"{emoji} {phase_text}")
+                progress.update(main_task, completed=70 + (i-3) * 15)
                 time.sleep(0.3)
             
-            self.console.print()
-            return response
+            # Final update
+            progress.update(
+                main_task,
+                completed=100,
+                description=f"[bold green]✅ Collected {response.total_posts_found} posts[/bold green]"
+            )
+            progress.update(phase_task, completed=len(phases), description="[bold green]✨ Complete![/bold green]")
+            
+            # Brief pause to show completion
+            time.sleep(0.8)
+            
+        return response
     
     def _handle_successful_response(
         self, 
