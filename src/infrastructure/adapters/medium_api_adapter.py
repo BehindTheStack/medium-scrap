@@ -126,30 +126,63 @@ class MediumApiAdapter(PostRepository):
                     break
                     
                 data = response.json()
-                if (data.get("errors") or not data.get("data") or 
-                    not data["data"].get("publication") or 
-                    not data["data"]["publication"].get("posts")):
+                if data.get("errors"):
                     break
                 
-                posts_data = data["data"]["publication"]["posts"]
-                edges = posts_data.get("edges", [])
-                
-                if not edges:
-                    break
-                
-                # Collect post IDs from this page
-                page_ids = [PostId(edge["node"]["id"]) for edge in edges if edge.get("node")]
-                all_post_ids.extend(page_ids)
-                collected += len(page_ids)
-                
-                # Check if there are more pages
-                page_info = posts_data.get("pageInfo", {})
-                if not page_info.get("hasNextPage"):
-                    break
+                # Handle different response structures for users vs publications
+                if config.id.value.startswith('@'):
+                    # User profile response structure
+                    if (not data.get("data") or 
+                        not data["data"].get("userResult") or 
+                        not data["data"]["userResult"].get("homepagePostsConnection")):
+                        break
                     
-                cursor = page_info.get("endCursor")
-                if not cursor:
-                    break
+                    posts_connection = data["data"]["userResult"]["homepagePostsConnection"]
+                    posts_list = posts_connection.get("posts", [])
+                    
+                    if not posts_list:
+                        break
+                    
+                    # Collect post IDs from this page
+                    page_ids = [PostId(post["id"]) for post in posts_list]
+                    all_post_ids.extend(page_ids)
+                    collected += len(page_ids)
+                    
+                    # Check pagination info
+                    paging_info = posts_connection.get("pagingInfo", {})
+                    next_page = paging_info.get("next")
+                    
+                    if not next_page or not next_page.get("from"):
+                        break
+                        
+                    cursor = next_page.get("from")
+                    
+                else:
+                    # Publication response structure (original)
+                    if (not data.get("data") or 
+                        not data["data"].get("publication") or 
+                        not data["data"]["publication"].get("posts")):
+                        break
+                    
+                    posts_data = data["data"]["publication"]["posts"]
+                    edges = posts_data.get("edges", [])
+                    
+                    if not edges:
+                        break
+                    
+                    # Collect post IDs from this page
+                    page_ids = [PostId(edge["node"]["id"]) for edge in edges if edge.get("node")]
+                    all_post_ids.extend(page_ids)
+                    collected += len(page_ids)
+                    
+                    # Check if there are more pages
+                    page_info = posts_data.get("pageInfo", {})
+                    if not page_info.get("hasNextPage"):
+                        break
+                        
+                    cursor = page_info.get("endCursor")
+                    if not cursor:
+                        break
                     
             except Exception:
                 break
@@ -172,7 +205,7 @@ class MediumApiAdapter(PostRepository):
                 else:
                     url = f"https://{config.domain}/?page={page}"
             else:
-                # For Medium-hosted publications
+                # For Medium-hosted publications (users and publications)
                 if page == 0:
                     url = f"https://medium.com/{config.id.value}"
                 else:
@@ -271,35 +304,92 @@ class MediumApiAdapter(PostRepository):
     
     def _build_publication_query(self, publication_id: str, limit: int, cursor: str = None) -> Dict[str, Any]:
         """Build GraphQL query for discovering posts from publication with pagination support"""
-        return {
-            "operationName": "PublicationPostsQuery",
-            "variables": {
-                "publicationId": publication_id,
-                "first": limit,
-                "after": cursor
-            },
-            "query": """query PublicationPostsQuery($publicationId: ID!, $first: Int, $after: String) {
-                publication(id: $publicationId) {
-                    id
-                    name
-                    posts(first: $first, after: $after) {
-                        pageInfo {
-                            hasNextPage
-                            endCursor
-                        }
-                        edges {
-                            node {
-                                id
-                                title
-                                uniqueSlug
-                                firstPublishedAt
+        # Check if it's a user profile (starts with @)
+        if publication_id.startswith('@'):
+            username = publication_id[1:]  # Remove @ for the query
+            return {
+                "operationName": "UserProfileQuery",
+                "variables": {
+                    "homepagePostsFrom": cursor,
+                    "includeDistributedResponses": True,
+                    "includeShouldFollowPostForExternalSearch": True,
+                    "id": None,
+                    "username": username,
+                    "homepagePostsLimit": limit
+                },
+                "query": """query UserProfileQuery($id: ID, $username: ID, $homepagePostsLimit: PaginationLimit, $homepagePostsFrom: String = null, $includeDistributedResponses: Boolean = true, $includeShouldFollowPostForExternalSearch: Boolean = false) {
+                    userResult(id: $id, username: $username) {
+                        __typename
+                        ... on User {
+                            id
+                            name
+                            homepagePostsConnection(
+                                paging: {limit: $homepagePostsLimit, from: $homepagePostsFrom}
+                                includeDistributedResponses: $includeDistributedResponses
+                            ) {
+                                posts {
+                                    id
+                                    title
+                                    uniqueSlug
+                                    firstPublishedAt
+                                    latestPublishedAt
+                                    readingTime
+                                    creator {
+                                        id
+                                        name
+                                        username
+                                    }
+                                    extendedPreviewContent {
+                                        subtitle
+                                    }
+                                    __typename
+                                }
+                                pagingInfo {
+                                    next {
+                                        from
+                                        limit
+                                        __typename
+                                    }
+                                    __typename
+                                }
                                 __typename
+                            }
+                            __typename
+                        }
+                    }
+                }"""
+            }
+        else:
+            # Original publication query
+            return {
+                "operationName": "PublicationPostsQuery",
+                "variables": {
+                    "publicationId": publication_id,
+                    "first": limit,
+                    "after": cursor
+                },
+                "query": """query PublicationPostsQuery($publicationId: ID!, $first: Int, $after: String) {
+                    publication(id: $publicationId) {
+                        id
+                        name
+                        posts(first: $first, after: $after) {
+                            pageInfo {
+                                hasNextPage
+                                endCursor
+                            }
+                            edges {
+                                node {
+                                    id
+                                    title
+                                    uniqueSlug
+                                    firstPublishedAt
+                                    __typename
+                                }
                             }
                         }
                     }
-                }
-            }"""
-        }
+                }"""
+            }
     
     def _parse_post(self, post_data: Dict[str, Any]) -> Post:
         """Parse post data from API response to domain entity"""

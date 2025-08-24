@@ -31,11 +31,10 @@ class InMemoryPublicationRepository(PublicationRepository):
         """Create generic configuration for unknown publications"""
         # Detect if it's a custom domain or medium-hosted
         if publication_name.startswith('@'):
-            # User profile
-            username = publication_name[1:]
+            # User profile - keep the @ in the ID for URL construction
             return PublicationConfig(
-                id=PublicationId(username),
-                name=username.title().replace('-', ' '),
+                id=PublicationId(publication_name),  # Keep the @ 
+                name=publication_name[1:].title().replace('-', ' '),  # Remove @ from display name
                 type=PublicationType.MEDIUM_HOSTED,
                 domain="medium.com",
                 graphql_url="https://medium.com/_/graphql",
