@@ -1,0 +1,179 @@
+# Universal Medium Scraper - Enterprise Edition
+
+🏢 **Arquitetura Enterprise-grade com padrões Netflix/Spotify**
+
+## 🚀 Visão Geral
+
+Scraper universal do Medium construído com **Clean Architecture**, **SOLID Principles** e **Design Patterns** utilizados por empresas como Netflix e Spotify. Suporta qualquer publicação do Medium com descoberta inteligente de posts.
+
+## 🏗️ Arquitetura Clean
+
+### Camadas
+
+```
+src/
+├── domain/               # Regras de negócio puras
+│   ├── entities/         # Entidades de domínio
+│   ├── repositories/     # Interfaces dos repositórios
+│   └── services/         # Serviços de domínio
+├── application/          # Casos de uso da aplicação
+│   └── use_cases/        # Implementação dos casos de uso
+├── infrastructure/       # Adaptadores externos
+│   ├── adapters/         # Adaptadores para APIs externas
+│   └── external/         # Implementações concretas
+└── presentation/         # Interface do usuário
+    └── cli.py            # Controller CLI
+```
+
+### Padrões Implementados
+
+- **Repository Pattern**: Abstração de acesso a dados
+- **Strategy Pattern**: Diferentes estratégias de descoberta
+- **Command Pattern**: Casos de uso como comandos
+- **Adapter Pattern**: Integração com API externa
+- **Dependency Injection**: Inversão de dependências
+
+## 🎯 Recursos
+
+- ✅ **Descoberta Inteligente**: Auto-discovery + IDs conhecidos + fallback
+- ✅ **Publicações Suportadas**: Netflix, Pinterest, qualquer publicação
+## 🛠️ Instalação
+
+```bash
+# Clone o repositório
+git clone <repo-url>
+cd medium-scrap
+
+# Instale com uv
+uv sync
+```
+
+## � Uso
+
+### Comandos Básicos
+
+```bash
+# Scraping rápido do Netflix
+python main.py --publication netflix --limit 5
+
+# Auto-descoberta (modo produção)
+python main.py --publication pinterest --auto-discover --skip-session --format json
+
+# IDs customizados
+python main.py --publication netflix --custom-ids "ac15cada49ef,64c786c2a3ac"
+
+# Qualquer publicação
+python main.py --publication unknown-blog --auto-discover --limit 10
+```
+
+### Opções Completas
+
+```bash
+-p, --publication TEXT         Nome da publicação (netflix, pinterest, ou qualquer)
+-o, --output TEXT              Arquivo para salvar resultados
+-f, --format [table|json|ids]  Formato de saída
+--custom-ids TEXT              Lista de IDs específicos (separados por vírgula)
+--skip-session                 Pular inicialização de sessão (mais rápido)
+--limit INTEGER                Número máximo de posts
+--auto-discover                Forçar modo auto-descoberta (pronto para produção)
+--help                         Mostrar ajuda
+```
+
+## 🧪 Testes
+
+```bash
+# Todos os testes
+python -m pytest tests/ -v
+
+# Apenas testes unitários
+python -m pytest tests/unit/ -v
+
+# Apenas testes de integração
+python -m pytest tests/integration/ -v
+```
+
+## 📋 Publicações Suportadas
+
+### Pré-configuradas
+- **Netflix Tech Blog** (`netflix`)
+- **Pinterest Engineering** (`pinterest`)
+
+### Descoberta Universal
+- Qualquer publicação do Medium pode ser descoberta automaticamente
+- Use `--auto-discover` para publicações não pré-configuradas
+
+## 🏢 Padrões Enterprise
+
+### Princípios SOLID
+
+- **Single Responsibility**: Cada classe tem uma responsabilidade
+- **Open/Closed**: Extensível sem modificação
+- **Liskov Substitution**: Subtipos substituem tipos base
+- **Interface Segregation**: Interfaces específicas
+- **Dependency Inversion**: Dependências abstratas
+
+### Clean Architecture
+
+- **Domain Layer**: Regras de negócio independentes
+- **Application Layer**: Casos de uso da aplicação
+- **Infrastructure Layer**: Detalhes de implementação
+- **Presentation Layer**: Interface do usuário
+
+## 🚀 Exemplos de Uso
+
+### Exemplo 1: Scraping Básico
+```bash
+python main.py --publication netflix --limit 3 --format table
+```
+
+### Exemplo 2: Modo Produção
+```bash
+python main.py --publication pinterest --auto-discover --skip-session --format json --output results.json
+```
+
+### Exemplo 3: IDs Específicos
+```bash
+python main.py --publication netflix --custom-ids "ac15cada49ef,64c786c2a3ac" --format json
+```
+
+## 📁 Estrutura do Projeto
+
+```
+medium-scrap/
+├── src/
+│   ├── domain/
+│   │   ├── entities/
+│   │   │   └── publication.py      # Entidades de domínio
+│   │   ├── repositories/
+│   │   │   └── base.py             # Interfaces dos repositórios
+│   │   └── services/
+│   │       └── publication_service.py  # Serviços de domínio
+│   ├── application/
+│   │   └── use_cases/
+│   │       └── scrape_posts.py     # Casos de uso principais
+│   ├── infrastructure/
+│   │   ├── adapters/
+│   │   │   └── medium_api_adapter.py   # Adaptador da API
+│   │   └── external/
+│   │       └── repositories.py     # Repositórios concretos
+│   └── presentation/
+│       └── cli.py                  # Interface CLI
+├── tests/
+│   ├── unit/                      # Testes unitários
+│   └── integration/               # Testes de integração
+├── main.py                        # Ponto de entrada
+├── pyproject.toml                 # Configuração do projeto
+└── README.md                      # Esta documentação
+```
+
+## 🎯 Benefícios da Arquitetura
+
+1. **Testabilidade**: Testes isolados para cada camada
+2. **Manutenibilidade**: Separação clara de responsabilidades
+3. **Extensibilidade**: Fácil adição de novas funcionalidades
+4. **Escalabilidade**: Arquitetura preparada para crescimento
+5. **Qualidade**: Padrões utilizados por empresas tier-1
+
+---
+
+**Desenvolvido com Clean Architecture e padrões enterprise-grade** 🏢✨
