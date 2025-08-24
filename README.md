@@ -209,6 +209,17 @@ medium-scrap/
 4. **Escalabilidade**: Arquitetura preparada para crescimento
 5. **Qualidade**: Padrões utilizados por empresas tier-1
 
+## 📄 Licença
+
+Este projeto está licenciado sob a [Licença MIT](LICENSE) - veja o arquivo [LICENSE](LICENSE) para detalhes completos.
+
+### Resumo da Licença MIT
+- ✅ **Uso Comercial**: Permitido uso em projetos comerciais
+- ✅ **Modificação**: Pode modificar o código fonte
+- ✅ **Distribuição**: Pode distribuir versões modificadas
+- ✅ **Uso Privado**: Pode usar para projetos privados
+- ⚠️ **Responsabilidade**: Software fornecido "como está", sem garantias
+
 ---
 
 **Desenvolvido com Clean Architecture e padrões enterprise-grade** 🏢✨
