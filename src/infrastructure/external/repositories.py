@@ -42,12 +42,20 @@ class InMemoryPublicationRepository(PublicationRepository):
             )
         elif '.' in publication_name:
             # Assume custom domain
-            domain = publication_name if publication_name.startswith(('http://', 'https://')) else f"{publication_name}.com"
-            domain = domain.replace('https://', '').replace('http://', '')
+            # Clean URL protocol if present
+            clean_domain = publication_name.replace('https://', '').replace('http://', '')
+            # Remove trailing slash if present
+            clean_domain = clean_domain.rstrip('/')
+            
+            # Only add .com if it doesn't already have a valid extension
+            if not any(clean_domain.endswith(ext) for ext in ['.com', '.org', '.net', '.io', '.dev', '.engineering', '.tech']):
+                domain = f"{clean_domain}.com"
+            else:
+                domain = clean_domain
             
             return PublicationConfig(
                 id=PublicationId(publication_name),
-                name=publication_name.title().replace('-', ' '),
+                name=clean_domain.replace('-', ' ').replace('.', ' ').title(),
                 type=PublicationType.CUSTOM_DOMAIN,
                 domain=domain,
                 graphql_url=f"https://{domain}/_/graphql",
