@@ -1,0 +1,105 @@
+# Medium Sources Configuration
+# This file contains predefined Medium publications and users for easy scraping
+# Usage: python main.py --config-source <source_name>
+
+sources:
+  # Technology & Engineering
+  engineering:
+    type: publication
+    name: freecodecamp
+    description: "FreeCodeCamp - Programming tutorials and tips"
+    auto_discover: true
+    
+  skyscanner:
+    type: username  
+    name: "@SkyscannerEng"
+    description: "Skyscanner Engineering - Travel tech insights"
+    auto_discover: true
+    
+  netflix:
+    type: publication
+    name: netflixtechblog
+    description: "Netflix Technology Blog"
+    auto_discover: true
+    
+  airbnb:
+    type: publication
+    name: airbnb-engineering
+    description: "Airbnb Engineering & Data Science"
+    auto_discover: true
+    
+  uber:
+    type: publication
+    name: uber-engineering
+    description: "Uber Engineering Blog"
+    auto_discover: true
+    
+  # Startups & Business
+  startup:
+    type: publication
+    name: hackernoon
+    description: "Hacker Noon - Tech stories and tutorials"
+    auto_discover: true
+    
+  medium-staff:
+    type: publication
+    name: medium-staff
+    description: "Official Medium Staff picks"
+    auto_discover: true
+    
+  # Data Science & AI
+  towards-data-science:
+    type: publication
+    name: towards-data-science
+    description: "Towards Data Science - ML, AI, and Data insights"
+    auto_discover: true
+    
+  # Design & UX
+  ux-design:
+    type: publication
+    name: ux-design
+    description: "UX Design - User experience articles"
+    auto_discover: true
+    
+  # Individual Users Examples
+  tinder-eng:
+    type: username
+    name: "@TinderEng"
+    description: "Tinder Engineering Team"
+    auto_discover: true
+    
+  # Custom domains (examples)
+  custom-domain-example:
+    type: publication
+    name: blog.example.com
+    description: "Custom domain publication example"
+    auto_discover: false
+    custom_domain: true
+
+# Default settings that apply to all sources unless overridden
+defaults:
+  limit: 50
+  skip_session: true
+  format: json
+  output_dir: "outputs"
+  
+# Bulk operations - collect from multiple sources at once  
+bulk_collections:
+  tech_giants:
+    description: "All major tech company blogs"
+    sources:
+      - netflix
+      - airbnb
+      - uber
+      - skyscanner
+      
+  data_science:
+    description: "Data Science and AI focused content"
+    sources:
+      - towards-data-science
+      
+  startup_ecosystem:
+    description: "Startup and business content"
+    sources:
+      - startup
+      - medium-staff
