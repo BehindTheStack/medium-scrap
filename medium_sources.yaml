@@ -18,9 +18,10 @@ sources:
     
   netflix:
     type: publication
-    name: netflixtechblog
+    name: netflix
     description: "Netflix Technology Blog"
     auto_discover: true
+    custom_domain: true
     
   airbnb:
     type: publication

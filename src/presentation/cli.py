@@ -133,15 +133,28 @@ class CLIController:
             self.console.print()
             
             # Execute scraping
-            self.scrape_posts(
-                publication=source_config.get_publication_name(),
-                limit=None if all_posts else limit,
-                format_type=format_type,
-                custom_ids=None,
-                auto_discover=source_config.auto_discover,
-                skip_session=defaults.get('skip_session', True),
-                output_file=output_file
-            )
+            if source_config.custom_domain:
+                # For custom domains from YAML, call scrape_posts with the domain directly
+                self.scrape_posts(
+                    publication=source_config.name,  # Use the full domain name
+                    limit=None if all_posts else limit,
+                    format_type=format_type,
+                    custom_ids=None,
+                    auto_discover=source_config.auto_discover,
+                    skip_session=defaults.get('skip_session', True),
+                    output_file=output_file
+                )
+            else:
+                # Use normal flow for medium-hosted publications
+                self.scrape_posts(
+                    publication=source_config.get_publication_name(),
+                    limit=None if all_posts else limit,
+                    format_type=format_type,
+                    custom_ids=None,
+                    auto_discover=source_config.auto_discover,
+                    skip_session=defaults.get('skip_session', True),
+                    output_file=output_file
+                )
             
         except KeyError as e:
             self.console.print(f"[red]❌ {e}[/red]")
