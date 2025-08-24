@@ -9,13 +9,84 @@ from pathlib import Path
 from typing import List, Optional
 from rich.console import Console
 from rich.table import Table
-from rich.progress import Progress, SpinnerColumn, TextColumn
+from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeElapsedColumn
+from rich.live import Live
+from rich.panel import Panel
+from rich.text import Text
+import time
+import threading
 
 from ..application.use_cases.scrape_posts import (
     ScrapePostsUseCase, ScrapePostsRequest, ScrapePostsResponse
 )
 from ..domain.entities.publication import Post
 from ..infrastructure.config.source_manager import SourceConfigManager
+
+
+class AdvancedProgressLoader:
+    """
+    Advanced progress loader with detailed feedback
+    Shows collection phases and progress
+    """
+    
+    def __init__(self, console: Console):
+        self.console = console
+        self.phases = [
+            "🔍 Resolving publication configuration...",
+            "🤖 Analyzing publication type...", 
+            "📡 Connecting to Medium API...",
+            "🔎 Discovering post IDs...",
+            "📝 Collecting post details...",
+            "✨ Processing collected data..."
+        ]
+        self.current_phase = 0
+        self.posts_found = 0
+        self.is_running = False
+        
+    def start_collection(self, publication_name: str, limit: int = None):
+        """Start the collection process with visual feedback"""
+        self.is_running = True
+        
+        with Progress(
+            SpinnerColumn(spinner_style="cyan"),
+            TextColumn("[bold blue]{task.description}"),
+            BarColumn(complete_style="green"),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            TimeElapsedColumn(),
+            console=self.console,
+            transient=False
+        ) as progress:
+            
+            # Main progress task
+            main_task = progress.add_task(
+                f"🚀 Collecting from: {publication_name}",
+                total=100
+            )
+            
+            # Phase task
+            phase_task = progress.add_task(
+                self.phases[0],
+                total=len(self.phases)
+            )
+            
+            return progress, main_task, phase_task
+    
+    def update_phase(self, progress, phase_task, phase_index: int):
+        """Update the current phase"""
+        if phase_index < len(self.phases):
+            progress.update(
+                phase_task,
+                completed=phase_index,
+                description=self.phases[phase_index]
+            )
+    
+    def update_posts_count(self, progress, main_task, posts_count: int):
+        """Update posts count and overall progress"""
+        self.posts_found = posts_count
+        progress.update(
+            main_task,
+            description=f"🚀 Collected {posts_count} posts"
+        )
 
 
 class PostFormatter:
@@ -72,6 +143,7 @@ class CLIController:
         self._formatter = PostFormatter()
         self.console = Console()
         self._config_manager = SourceConfigManager()
+        self._progress_loader = AdvancedProgressLoader(self.console)
     
     def list_sources(self) -> None:
         """List all available configured sources"""
@@ -127,8 +199,18 @@ class CLIController:
                 output_dir.mkdir(exist_ok=True)
                 output_file = str(output_dir / f"{source_key}_posts.json")
             
-            # Show source info
-            self.console.print(f"[bold green]📖 Using configured source:[/bold green] {source_key}")
+            # Show source info with loading animation
+            with Progress(
+                SpinnerColumn(style="green"),
+                TextColumn("[green]{task.description}"),
+                console=self.console
+            ) as config_progress:
+                task = config_progress.add_task("📖 Loading source configuration...", total=None)
+                time.sleep(0.2)  # Brief animation
+                config_progress.update(task, description=f"✅ Loaded: {source_key}")
+                time.sleep(0.2)
+            
+            self.console.print(f"[bold green]📖 Source:[/bold green] {source_key}")
             self.console.print(f"[dim]{source_config.description}[/dim]")
             self.console.print()
             
@@ -182,15 +264,40 @@ class CLIController:
             output_dir = Path(defaults.get('output_dir', 'outputs'))
             output_dir.mkdir(exist_ok=True)
             
-            for source_key in bulk_config.sources:
-                self.console.print(f"[blue]📥 Collecting from:[/blue] {source_key}")
-                self.scrape_from_config(
-                    source_key=source_key,
-                    limit=limit,
-                    format_type=format_type,
-                    output_file=str(output_dir / f"{source_key}_posts.json")
+            # Progress for bulk collection
+            with Progress(
+                TextColumn("[bold blue]{task.description}"),
+                BarColumn(complete_style="green"),
+                TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+                TextColumn("({task.completed}/{task.total})"),
+                console=self.console
+            ) as bulk_progress:
+                
+                bulk_task = bulk_progress.add_task(
+                    f"📦 Processing bulk collection: {bulk_key}",
+                    total=len(bulk_config.sources)
                 )
-                self.console.print()
+                
+                for i, source_key in enumerate(bulk_config.sources):
+                    bulk_progress.update(
+                        bulk_task,
+                        description=f"📥 Collecting from: {source_key}",
+                        completed=i
+                    )
+                    
+                    self.scrape_from_config(
+                        source_key=source_key,
+                        limit=limit,
+                        format_type=format_type,
+                        output_file=str(output_dir / f"{source_key}_posts.json")
+                    )
+                    
+                    bulk_progress.update(bulk_task, completed=i + 1)
+                    
+                bulk_progress.update(
+                    bulk_task,
+                    description=f"✅ Bulk collection completed: {bulk_key}"
+                )
                 
         except KeyError as e:
             self.console.print(f"[red]❌ {e}[/red]")
@@ -244,20 +351,84 @@ class CLIController:
             self._handle_failed_response(response)
     
     def _execute_with_progress(self, request: ScrapePostsRequest, skip_session: bool) -> ScrapePostsResponse:
-        """Execute use case with progress indication"""
+        """Execute use case with enhanced progress indication"""
         if skip_session:
+            # Start enhanced progress display
             with Progress(
-                SpinnerColumn(),
-                TextColumn("[progress.description]{task.description}"),
+                SpinnerColumn(style="cyan"),
+                TextColumn("[bold blue]{task.description}"),
+                BarColumn(complete_style="green", finished_style="green"),
+                TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+                TimeElapsedColumn(),
                 console=self.console,
+                transient=False
             ) as progress:
-                task = progress.add_task("Collecting posts...", total=None)
+                
+                # Create main task
+                main_task = progress.add_task(
+                    f"🚀 Scraping: {request.publication_name}",
+                    total=100
+                )
+                
+                # Create phase task
+                phases = [
+                    "🔍 Resolving publication...",
+                    "🤖 Detecting publication type...", 
+                    "📡 Connecting to Medium API...",
+                    "🔎 Discovering posts...",
+                    "📝 Collecting post details...",
+                    "✨ Finalizing..."
+                ]
+                
+                phase_task = progress.add_task(
+                    phases[0],
+                    total=len(phases)
+                )
+                
+                # Simulate phases (in real implementation, this would be callbacks from use case)
+                for i, phase in enumerate(phases[:3]):  # Pre-execution phases
+                    progress.update(phase_task, completed=i, description=phase)
+                    progress.update(main_task, completed=(i * 15))
+                    time.sleep(0.2)  # Small delay to show progress
+                
+                # Execute the actual use case
+                progress.update(phase_task, completed=3, description="📡 Executing scraping...")
+                progress.update(main_task, completed=50)
+                
                 response = self._scrape_posts_use_case.execute(request)
-                progress.update(task, description=f"Posts collected: {response.total_posts_found}")
+                
+                # Post-execution phases
+                for i, phase in enumerate(phases[4:], 4):
+                    progress.update(phase_task, completed=i, description=phase)
+                    progress.update(main_task, completed=70 + (i-3) * 15)
+                    time.sleep(0.1)
+                
+                # Final update
+                progress.update(
+                    main_task,
+                    completed=100,
+                    description=f"✅ Collected {response.total_posts_found} posts"
+                )
+                progress.update(phase_task, completed=len(phases), description="✨ Complete!")
+                
+                # Brief pause to show completion
+                time.sleep(0.5)
+                
             return response
         else:
-            self.console.print(f"[blue]🔄 Initializing session...[/blue]")
-            response = self._scrape_posts_use_case.execute(request)
+            # Session mode with simpler progress
+            self.console.print(f"[blue]🔄 Initializing session for {request.publication_name}...[/blue]")
+            
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[blue]{task.description}"),
+                console=self.console,
+            ) as progress:
+                task = progress.add_task("Setting up session and collecting posts...", total=None)
+                response = self._scrape_posts_use_case.execute(request)
+                progress.update(task, description=f"Session complete - {response.total_posts_found} posts found")
+                time.sleep(0.3)
+            
             self.console.print()
             return response
     
