@@ -2,9 +2,23 @@
 
 🏢 **Arquitetura Enterprise-grade com padrões Netflix/Spotify**
 
+[![Tests](https://img.shields.io/badge/tests-73%20passing-brightgreen)](#-testes)
+[![Coverage](https://img.shields.io/badge/coverage-44%25-yellow)](#-cobertura)
+[![Clean Architecture](https://img.shields.io/badge/architecture-clean-blue)](#-arquitetura-clean)
+[![Python](https://img.shields.io/badge/python-3.10%2B-blue)](#-instalação)
+
 ## 🚀 Visão Geral
 
-Scraper universal do Medium construído com **Clean Architecture**, **SOLID Principles** e **Design Patterns** utilizados por empresas como Netflix e Spotify. Suporta qualquer publicação do Medium com descoberta inteligente de posts.
+Scraper universal do Medium construído com **Clean Architecture**, **SOLID Principles** e **Design Patterns** utilizados por empresas como Netflix e Spotify. Suporta qualquer publicação do Medium com descoberta inteligente de posts e interface visual moderna.
+
+### ✨ Novidades v2.0
+
+- 🎨 **Interface Visual Melhorada**: Loader animado com fases de progresso
+- 🌐 **Domínios Customizados**: Suporte completo para `.engineering`, `.tech`, etc.
+- 📊 **Progress Tracking**: Barra de progresso em tempo real
+- 🧪 **73 Testes**: Suíte completa de testes unitários e integração
+- 📝 **YAML Config**: Sistema de configuração flexível
+- 🚀 **Bulk Collections**: Colete de múltiplas fontes simultaneamente
 
 ## 🏗️ Arquitetura Clean
 
@@ -13,16 +27,17 @@ Scraper universal do Medium construído com **Clean Architecture**, **SOLID Prin
 ```
 src/
 ├── domain/               # Regras de negócio puras
-│   ├── entities/         # Entidades de domínio
+│   ├── entities/         # Entidades de domínio (Post, Author, Publication)
 │   ├── repositories/     # Interfaces dos repositórios
 │   └── services/         # Serviços de domínio
 ├── application/          # Casos de uso da aplicação
 │   └── use_cases/        # Implementação dos casos de uso
 ├── infrastructure/       # Adaptadores externos
-│   ├── adapters/         # Adaptadores para APIs externas
+│   ├── adapters/         # Adaptadores para APIs externas (GraphQL)
+│   ├── config/           # Gerenciamento de configuração YAML
 │   └── external/         # Implementações concretas
 └── presentation/         # Interface do usuário
-    └── cli.py            # Controller CLI
+    └── cli.py            # Controller CLI com Rich UI
 ```
 
 ### Padrões Implementados
@@ -32,11 +47,31 @@ src/
 - **Command Pattern**: Casos de uso como comandos
 - **Adapter Pattern**: Integração com API externa
 - **Dependency Injection**: Inversão de dependências
+- **Factory Pattern**: Criação de configurações
+- **Observer Pattern**: Sistema de progress tracking
 
 ## 🎯 Recursos
 
+### Core Features
 - ✅ **Descoberta Inteligente**: Auto-discovery + IDs conhecidos + fallback
-- ✅ **Publicações Suportadas**: Netflix, Pinterest, qualquer publicação
+- ✅ **Domínios Customizados**: Netflix, Kickstarter, etc. 
+- ✅ **Perfis de Usuário**: @SkyscannerEng, @TinderEng, etc.
+- ✅ **Publicações Medium**: Pinterest, Airbnb, Uber, etc.
+- ✅ **Paginação Completa**: Coleta TODOS os posts disponíveis
+- ✅ **Rate Limiting**: Respeita limites da API
+
+### Interface & UX  
+- 🎨 **Rich CLI**: Interface visual moderna com cores e emojis
+- 📊 **Progress Bars**: Loader animado com fases detalhadas
+- 🎭 **Multiple Formats**: Table, JSON, IDs
+- 📁 **Auto Output**: Salvamento automático em `outputs/`
+- 🔄 **Bulk Operations**: Processamento em lote
+
+### Configuração & Flexibilidade
+- 📝 **YAML Sources**: Configure fontes reutilizáveis
+- 🎛️ **Flexible Parameters**: Limite, formato, modo, etc.
+- 🔧 **Custom Domains**: Suporte automático para qualquer domínio
+- 📦 **Bulk Collections**: Grupos de fontes predefinidos
 ## 🛠️ Instalação
 
 ```bash
