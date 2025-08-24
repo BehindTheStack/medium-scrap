@@ -42,12 +42,12 @@ class PostRepository(ABC):
         pass
     
     @abstractmethod
-    def discover_post_ids(self, config: PublicationConfig, limit: int = 25) -> List[PostId]:
-        """Discover post IDs automatically from publication"""
+    def discover_post_ids(self, config: PublicationConfig, limit: Optional[int] = 25) -> List[PostId]:
+        """Automatically discover post IDs from publication"""
         pass
     
     @abstractmethod
-    def get_posts_from_publication_feed(self, config: PublicationConfig, limit: int = 25) -> List[Post]:
+    def get_posts_from_publication_feed(self, config: PublicationConfig, limit: Optional[int] = 25) -> List[Post]:
         """Get posts directly from publication feed"""
         pass
 

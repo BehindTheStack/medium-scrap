@@ -20,7 +20,7 @@ class PostDiscoveryService:
     def discover_posts_intelligently(
         self, 
         config: PublicationConfig, 
-        limit: int = 25,
+        limit: Optional[int] = 25,
         prefer_auto_discovery: bool = False
     ) -> List[Post]:
         """
@@ -39,11 +39,11 @@ class PostDiscoveryService:
             if discovered_ids:
                 posts = self._post_repository.get_posts_by_ids(discovered_ids, config)
                 if posts:
-                    return posts[:limit] if limit else posts
+                    return posts[:limit] if limit is not None else posts
         
         # Strategy 2: Known IDs (reliable fallback)
         if config.has_known_posts:
-            known_ids = config.known_post_ids[:limit] if limit else config.known_post_ids
+            known_ids = config.known_post_ids[:limit] if limit is not None else config.known_post_ids
             posts = self._post_repository.get_posts_by_ids(known_ids, config)
             if posts:
                 return posts

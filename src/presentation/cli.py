@@ -192,9 +192,10 @@ class CLIController:
 @click.option('--custom-ids', help='Comma-separated list of specific post IDs')
 @click.option('--skip-session', is_flag=True, help='Skip session initialization (faster)')
 @click.option('--limit', type=int, help='Maximum number of posts to collect')
+@click.option('--all', 'all_posts', is_flag=True, help='Collect ALL posts from publication (no limit)')
 @click.option('--auto-discover', is_flag=True, 
               help='Force auto-discovery mode (production ready)')
-def cli(publication, output, format_type, custom_ids, skip_session, limit, auto_discover):
+def cli(publication, output, format_type, custom_ids, skip_session, limit, all_posts, auto_discover):
     """
     Universal Medium Scraper - Enterprise Edition
     
@@ -213,7 +214,17 @@ def cli(publication, output, format_type, custom_ids, skip_session, limit, auto_
     \b
     # Custom post IDs
     python -m src.main --publication netflix --custom-ids "ac15cada49ef,64c786c2a3ac"
+    
+    \b
+    # Collect ALL posts from publication
+    python -m src.main --publication netflix --all --skip-session --format json --output all_posts.json
     """
+    # Handle --all flag
+    if all_posts:
+        limit = None
+        auto_discover = True  # Force auto-discover for complete collection
+        click.echo("🌟 Collecting ALL posts from publication (this may take a while)...")
+    
     # Dependency injection setup (would normally be in a container)
     from ..infrastructure.adapters.medium_api_adapter import MediumApiAdapter
     from ..infrastructure.external.repositories import InMemoryPublicationRepository, MediumSessionRepository
