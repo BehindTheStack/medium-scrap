@@ -56,7 +56,15 @@ class MediumApiAdapter(PostRepository):
         discovered_ids = []
         
         try:
-            # Strategy 1: GraphQL Publication Query
+            # Strategy 1: Publication All Posts Query (NEW)
+            discovered_ids = self._discover_via_publication_all(config, limit)
+            if discovered_ids:
+                return discovered_ids
+        except Exception:
+            pass
+        
+        try:
+            # Strategy 2: GraphQL Publication Query
             discovered_ids = self._discover_via_graphql(config, limit)
             if discovered_ids:
                 return discovered_ids
@@ -64,7 +72,7 @@ class MediumApiAdapter(PostRepository):
             pass
         
         try:
-            # Strategy 2: HTML Scraping
+            # Strategy 3: HTML Scraping
             discovered_ids = self._discover_via_html_scraping(config, limit)
             if discovered_ids:
                 return discovered_ids
@@ -110,11 +118,11 @@ class MediumApiAdapter(PostRepository):
         collected = 0
         
         # If no limit, set a high number to continue until no more pages
-        max_to_collect = limit if limit is not None else float('inf')
+        max_to_collect = limit if limit is not None else 999999  # Use a large number instead of infinity
         
         while collected < max_to_collect:
             remaining = max_to_collect - collected if limit is not None else page_size
-            current_page_size = min(page_size, int(remaining)) if limit is not None else page_size
+            current_page_size = min(page_size, remaining if limit is not None else page_size)
             
             query = self._build_publication_query(config.id.value, current_page_size, cursor)
             
@@ -195,7 +203,7 @@ class MediumApiAdapter(PostRepository):
         page = 0
         
         # If no limit, set a high number
-        max_to_collect = limit if limit is not None else float('inf')
+        max_to_collect = limit if limit is not None else 999999
         
         while len(all_ids) < max_to_collect:
             if config.is_custom_domain:
@@ -256,6 +264,147 @@ class MediumApiAdapter(PostRepository):
         
         return [PostId(id_str) for id_str in limited_ids]
     
+    def _discover_via_publication_all(self, config: PublicationConfig, limit: Optional[int]) -> List[PostId]:
+        """Discover post IDs using the /all route and PublicationContentDataQuery"""
+        all_post_ids = []
+        cursor = None
+        collected = 0
+        max_to_collect = limit if limit is not None else 999999
+        
+        # Build the publication reference based on configuration
+        if config.is_custom_domain:
+            publication_ref = {
+                "slug": None,
+                "domain": config.domain
+            }
+        else:
+            # For Medium-hosted publications, use slug
+            publication_ref = {
+                "slug": config.id.value,
+                "domain": None
+            }
+        
+        headers = self._get_headers_for_config(config)
+        
+        # Start with initial query (no cursor)
+        page = 0
+        max_pages = 200 if limit is None else 20  # More pages for --all
+        while collected < max_to_collect and page < max_pages:
+            try:
+                # Build the query
+                remaining_to_collect = max_to_collect - collected if max_to_collect != 999999 else 25
+                variables = {
+                    "ref": publication_ref,
+                    "first": min(25, remaining_to_collect),
+                    "after": cursor if cursor else "",  # Empty string for first page
+                    "orderBy": {"publishedAt": "DESC"},
+                    "filter": {"published": True}
+                }
+                
+                query_payload = {
+                    "operationName": "PublicationContentDataQuery",
+                    "variables": variables,
+                    "query": """query PublicationContentDataQuery($ref: PublicationRef!, $first: Int!, $after: String!, $orderBy: PublicationPostsOrderBy, $filter: PublicationPostsFilter) {
+  publication: publicationByRef(ref: $ref) {
+    __typename
+    id
+    publicationPostsConnection(
+      first: $first
+      after: $after
+      orderBy: $orderBy
+      filter: $filter
+    ) {
+      __typename
+      edges {
+        listedAt
+        node {
+          id
+          title
+          uniqueSlug
+          firstPublishedAt
+          latestPublishedAt
+          readingTime
+          creator {
+            id
+            name
+            username
+          }
+          extendedPreviewContent {
+            subtitle
+          }
+          __typename
+        }
+        __typename
+      }
+      pageInfo {
+        endCursor
+        hasNextPage
+        __typename
+      }
+    }
+  }
+}"""
+                }
+                
+                with httpx.Client(verify=False, timeout=30.0) as client:
+                    response = client.post(config.graphql_url, headers=headers, json=query_payload)
+                
+                if response.status_code != 200:
+                    break
+                
+                data = response.json()
+                
+                if ("errors" in data or 
+                    not data.get("data") or 
+                    not data["data"].get("publication") or 
+                    not data["data"]["publication"].get("publicationPostsConnection")):
+                    break
+                
+                posts_connection = data["data"]["publication"]["publicationPostsConnection"]
+                edges = posts_connection.get("edges", [])
+                
+                if not edges:
+                    break
+                
+                # Collect post IDs from this page
+                valid_post_ids = []
+                invalid_ids = []
+                for edge in edges:
+                    if edge.get("node"):
+                        post_id = edge["node"]["id"]
+                        try:
+                            valid_post_ids.append(PostId(post_id))
+                        except ValueError as e:
+                            invalid_ids.append(post_id)
+                            # Continue processing even with invalid IDs
+                            continue
+                
+                all_post_ids.extend(valid_post_ids)
+                collected += len(valid_post_ids)
+                
+                if invalid_ids:
+                    print(f"Skipped {len(invalid_ids)} invalid post IDs on page {page + 1}")
+                
+                # Check pagination
+                page_info = posts_connection.get("pageInfo", {})
+                if not page_info.get("hasNextPage"):
+                    print(f"Reached end of publication at page {page + 1} (hasNextPage=False)")
+                    break
+                    
+                cursor = page_info.get("endCursor")
+                if not cursor:
+                    print(f"No end cursor available at page {page + 1}")
+                    break
+                
+                page += 1
+                time.sleep(0.3)  # Rate limiting
+                
+            except Exception as e:
+                print(f"Error in publication all query: {e}")
+                break
+        
+        return all_post_ids
+    
     def _get_headers_for_config(self, config: PublicationConfig) -> Dict[str, str]:
         """Get appropriate headers for publication configuration"""
         headers = self._base_headers.copy()
@@ -312,12 +461,11 @@ class MediumApiAdapter(PostRepository):
                 "variables": {
                     "homepagePostsFrom": cursor,
                     "includeDistributedResponses": True,
-                    "includeShouldFollowPostForExternalSearch": True,
                     "id": None,
                     "username": username,
                     "homepagePostsLimit": limit
                 },
-                "query": """query UserProfileQuery($id: ID, $username: ID, $homepagePostsLimit: PaginationLimit, $homepagePostsFrom: String = null, $includeDistributedResponses: Boolean = true, $includeShouldFollowPostForExternalSearch: Boolean = false) {
+                "query": """query UserProfileQuery($id: ID, $username: ID, $homepagePostsLimit: PaginationLimit, $homepagePostsFrom: String = null, $includeDistributedResponses: Boolean = true) {
                     userResult(id: $id, username: $username) {
                         __typename
                         ... on User {
