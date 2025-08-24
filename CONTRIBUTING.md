@@ -1,82 +1,82 @@
 # Contributing to Medium Scraper
 
-Obrigado por seu interesse em contribuir para o Medium Scraper! Este guia ajudará você a começar.
+Thank you for your interest in contributing to Medium Scraper! This guide will help you get started.
 
-## 🚀 Como Contribuir
+## 🚀 How to Contribute
 
-### 1. Configuração do Ambiente de Desenvolvimento
+### 1. Development Environment Setup
 
-#### Pré-requisitos
-- Python 3.10 ou superior
+#### Prerequisites
+- Python 3.10 or higher
 - Git
-- UV (gerenciador de pacotes recomendado) ou pip
+- UV (recommended package manager) or pip
 
-#### Clone e Configuração
+#### Clone and Setup
 ```bash
-# Clone o repositório
+# Clone the repository
 git clone https://github.com/BehindTheStack/medium-scrap.git
 cd medium-scrap
 
-# Crie o ambiente virtual
+# Create virtual environment
 python -m venv .venv
 source .venv/bin/activate  # Linux/Mac
-# ou
+# or
 .venv\Scripts\activate  # Windows
 
-# Instale as dependências
+# Install dependencies
 pip install -e .
 ```
 
-### 2. Arquitetura do Projeto
+### 2. Project Architecture
 
-O projeto segue os princípios da **Clean Architecture** e **Domain-Driven Design**:
+The project follows **Clean Architecture** and **Domain-Driven Design** principles:
 
 ```
 src/
-├── domain/                 # Regras de negócio
-│   ├── entities/          # Entidades principais (Post, Author, etc.)
-│   ├── repositories/      # Interfaces dos repositórios
-│   └── services/          # Serviços de domínio
-├── application/           # Casos de uso
-│   └── use_cases/        # Orquestração da lógica de negócio
-├── infrastructure/       # Implementações técnicas
-│   ├── adapters/         # Adaptadores para APIs externas
-│   ├── config/           # Gerenciamento de configuração
-│   └── external/         # Repositórios e integrações
-└── presentation/         # Interface do usuário
-    └── cli.py            # Interface de linha de comando
+├── domain/                 # Business rules
+│   ├── entities/          # Core entities (Post, Author, etc.)
+│   ├── repositories/      # Repository interfaces
+│   └── services/          # Domain services
+├── application/           # Use cases
+│   └── use_cases/        # Business logic orchestration
+├── infrastructure/       # Technical implementations
+│   ├── adapters/         # External API adapters
+│   ├── config/           # Configuration management
+│   └── external/         # Repositories and integrations
+└── presentation/         # User interface
+    └── cli.py            # Command line interface
 ```
 
-### 3. Executando os Testes
+### 3. Running Tests
 
-Temos uma suíte completa de testes organizados:
+We have a complete organized test suite:
 
 ```bash
-# Todos os testes organizados
+# All organized tests
 pytest tests/unit/ tests/integration/ -v
 
-# Apenas testes unitários
+# Unit tests only
 pytest tests/unit/ -v
 
-# Apenas testes de integração
+# Integration tests only
 pytest tests/integration/ -v
 
-# Com cobertura
+# With coverage
 pytest tests/unit/ tests/integration/ --cov=src --cov-report=html
 ```
 
-#### Estrutura dos Testes
-- **Testes Unitários** (`tests/unit/`): Testam componentes isoladamente
-- **Testes de Integração** (`tests/integration/`): Testam fluxos completos
+#### Test Structure
+- **Unit Tests** (`tests/unit/`): Test components in isolation
+- **Integration Tests** (`tests/integration/`): Test complete flows
 
-### 4. Padrões de Código
+### 4. Code Standards
 
-#### Estilo de Código
-- Seguimos PEP 8
-- Usamos type hints sempre que possível
-- Documentação em docstrings seguindo o padrão Google
+#### Code Style
+- Follow PEP 8
+- Use type hints whenever possible
+- Documentation in docstrings following Google standard
 
-#### Exemplo de Classe:
+#### Class Example:
 ```python
 """
 Module docstring explaining the purpose
@@ -100,8 +100,8 @@ class ExampleEntity:
             raise ValueError("ID is required")
 ```
 
-#### Padrões de Commit
-Usamos Conventional Commits:
+#### Commit Patterns
+We use Conventional Commits:
 
 ```
 feat: add support for custom domains
@@ -112,63 +112,63 @@ refactor: improve error handling in CLI
 style: format code according to PEP 8
 ```
 
-### 5. Tipos de Contribuição
+### 5. Types of Contributions
 
-#### 🐛 Reportando Bugs
-- Use o template de issue para bugs
-- Inclua passos para reproduzir
-- Forneça informações do ambiente
-- Adicione logs de erro quando possível
+#### 🐛 Reporting Bugs
+- Use the bug issue template
+- Include steps to reproduce
+- Provide environment information
+- Add error logs when possible
 
-#### ✨ Propondo Features
-- Use o template de issue para features
-- Explique o caso de uso
-- Forneça exemplos de como seria usado
-- Considere impactos na arquitetura
+#### ✨ Proposing Features
+- Use the feature issue template
+- Explain the use case
+- Provide examples of how it would be used
+- Consider architecture impacts
 
-#### 🔧 Contribuindo com Código
+#### 🔧 Contributing Code
 
-##### Para Novas Features:
-1. **Crie uma issue** discutindo a feature
-2. **Fork o repositório**
-3. **Crie uma branch** específica: `feature/nome-da-feature`
-4. **Implemente** seguindo a arquitetura existente
-5. **Adicione testes** (unitários e/ou integração)
-6. **Atualize documentação** se necessário
-7. **Crie um Pull Request**
+##### For New Features:
+1. **Create an issue** discussing the feature
+2. **Fork the repository**
+3. **Create a specific branch**: `feature/feature-name`
+4. **Implement** following existing architecture
+5. **Add tests** (unit and/or integration)
+6. **Update documentation** if necessary
+7. **Create a Pull Request**
 
-##### Para Bug Fixes:
-1. **Crie uma issue** descrevendo o bug
-2. **Fork o repositório**
-3. **Crie uma branch**: `fix/nome-do-bug`
-4. **Corrija o bug**
-5. **Adicione teste** que reproduza e valide a correção
-6. **Crie um Pull Request**
+##### For Bug Fixes:
+1. **Create an issue** describing the bug
+2. **Fork the repository**
+3. **Create a branch**: `fix/bug-name`
+4. **Fix the bug**
+5. **Add test** that reproduces and validates the fix
+6. **Create a Pull Request**
 
-### 6. Adicionando Novas Publicações
+### 6. Adding New Publications
 
-#### Via YAML (Recomendado)
-Adicione ao `medium_sources.yaml`:
+#### Via YAML (Recommended)
+Add to `medium_sources.yaml`:
 
 ```yaml
-nova-publicacao:
-  type: publication  # ou username para perfis de usuário
-  name: domain.com   # ou @username
-  description: "Descrição da publicação"
+new-publication:
+  type: publication  # or username for user profiles
+  name: domain.com   # or @username
+  description: "Publication description"
   auto_discover: true
-  custom_domain: true  # se for domínio personalizado
+  custom_domain: true  # if custom domain
 ```
 
-#### Programaticamente
-Para publicações com lógica específica, adicione ao repositório:
+#### Programmatically
+For publications with specific logic, add to repository:
 
 ```python
-# Em src/infrastructure/external/repositories.py
+# In src/infrastructure/external/repositories.py
 def _load_predefined_publications(self):
-    # Adicione sua configuração personalizada
-    nova_config = PublicationConfig(
-        id=PublicationId("nova-pub"),
-        name="Nova Publicação",
+    # Add your custom configuration
+    new_config = PublicationConfig(
+        id=PublicationId("new-pub"),
+        name="New Publication",
         type=PublicationType.CUSTOM_DOMAIN,
         domain="domain.com",
         graphql_url="https://domain.com/_/graphql",
@@ -176,68 +176,68 @@ def _load_predefined_publications(self):
     )
 ```
 
-### 7. Testando Suas Mudanças
+### 7. Testing Your Changes
 
-#### Teste Funcional Básico
+#### Basic Functional Test
 ```bash
-# Teste com publicação conhecida
+# Test with known publication
 python main.py --publication netflix --limit 5 --format table --skip-session
 
-# Teste com fonte configurada
+# Test with configured source
 python main.py --source netflix --limit 3 --format json
 
-# Teste com domínio customizado
+# Test with custom domain
 python main.py --publication example.com --limit 5 --skip-session
 ```
 
-#### Teste de Integração
+#### Integration Testing
 ```bash
-# Execute a suíte de testes
+# Run test suite
 pytest tests/integration/test_comprehensive_scenarios.py -v
 
-# Teste específico do que você mudou
-pytest tests/unit/test_[seu_modulo].py -v
+# Test specific to your changes
+pytest tests/unit/test_[your_module].py -v
 ```
 
 ### 8. Pull Request Guidelines
 
-#### Checklist do PR
-- [ ] Código segue os padrões do projeto
-- [ ] Testes adicionados/atualizados
-- [ ] Documentação atualizada
-- [ ] Commits seguem Conventional Commits
-- [ ] Branch está atualizada com main
-- [ ] Sem conflitos de merge
+#### PR Checklist
+- [ ] Code follows project standards
+- [ ] Tests added/updated
+- [ ] Documentation updated
+- [ ] Commits follow Conventional Commits
+- [ ] Branch is up to date with main
+- [ ] No merge conflicts
 
-#### Template do PR
+#### PR Template
 ```markdown
-## Descrição
-Breve descrição das mudanças
+## Description
+Brief description of changes
 
-## Tipo de Mudança
+## Type of Change
 - [ ] Bug fix
-- [ ] Nova feature
-- [ ] Documentação
-- [ ] Refatoração
+- [ ] New feature
+- [ ] Documentation
+- [ ] Refactoring
 
-## Como Testar
-1. Passos para testar a mudança
-2. Comandos específicos
-3. Resultados esperados
+## How to Test
+1. Steps to test the change
+2. Specific commands
+3. Expected results
 
 ## Checklist
-- [ ] Testes passando
-- [ ] Código revisado
-- [ ] Documentação atualizada
+- [ ] Tests passing
+- [ ] Code reviewed
+- [ ] Documentation updated
 ```
 
-### 9. Estrutura de Dados
+### 9. Data Structures
 
-#### Entidades Principais
+#### Main Entities
 ```python
 @dataclass
 class Post:
-    """Representa um post do Medium"""
+    """Represents a Medium post"""
     id: PostId
     title: str
     slug: str
@@ -247,13 +247,117 @@ class Post:
 
 @dataclass
 class PublicationConfig:
-    """Configuração de uma publicação"""
+    """Publication configuration"""
     id: PublicationId
     name: str
     type: PublicationType
     domain: str
     graphql_url: str
     known_post_ids: List[PostId]
+```
+
+### 10. Debugging and Logs
+
+#### Local Debug
+```bash
+# Enable verbose logs (if implemented)
+python main.py --publication netflix --limit 5 --verbose
+
+# Use Python debug mode
+python -m pdb main.py --publication netflix --limit 5
+```
+
+#### Log Structure
+```python
+import logging
+
+logger = logging.getLogger(__name__)
+logger.info("Important information")
+logger.debug("Debug details")
+logger.warning("Warning about something")
+logger.error("Recoverable error")
+```
+
+### 11. Performance and Optimization
+
+#### Guidelines
+- **Rate Limiting**: Respect Medium API limits
+- **Caching**: Consider caching for unchanging data
+- **Pagination**: Implement efficient pagination
+- **Error Handling**: Handle errors gracefully
+
+#### Rate Limiting Example
+```python
+import time
+
+def with_rate_limit(self, delay: float = 0.5):
+    """Apply rate limiting between requests"""
+    time.sleep(delay)
+    # Your logic here
+```
+
+### 12. Useful Resources
+
+#### Documentation
+- [Rich Library](https://rich.readthedocs.io/) - User interface
+- [Click](https://click.palletsprojects.com/) - CLI framework
+- [Pytest](https://docs.pytest.org/) - Testing framework
+
+#### Development Tools
+```bash
+# Code formatting
+black src/ tests/
+
+# Linting
+flake8 src/ tests/
+
+# Type checking
+mypy src/
+```
+
+### 13. Community and Support
+
+#### Where to Get Help
+- **Issues**: For bugs and feature requests
+- **Discussions**: For general questions
+- **Wiki**: Additional documentation
+
+#### How to Report Problems
+1. Check if the problem has already been reported
+2. Use the appropriate issue template
+3. Provide as much context as possible
+4. Include versions and environment
+
+---
+
+## 📜 Licensing
+
+### License Agreement
+By contributing to this project, you agree that your contributions will be licensed under the same [MIT License](LICENSE) as the project.
+
+### What this means:
+- ✅ Your contributions can be used commercially
+- ✅ They can be modified and redistributed
+- ✅ You retain copyright of your original contributions
+- ⚠️ You guarantee you have the right to license your contributions
+
+### CLA (Contributor License Agreement)
+No separate CLA signing is required. The MIT license is sufficient and clear about rights and responsibilities.
+
+---
+
+## 📝 Final Notes
+
+- **Be respectful** with other contributors
+- **Keep discussions constructive** in issues and PRs
+- **Document your changes** adequately
+- **Test before submitting** changes
+
+Thank you for contributing to make Medium Scraper even better! 🚀
+
+---
+
+**Need help?** Open an issue or start a discussion. We're here to help! 😊
 ```
 
 ### 10. Debugging e Logs
