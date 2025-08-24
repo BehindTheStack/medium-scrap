@@ -1,225 +1,226 @@
 # Universal Medium Scraper - Enterprise Edition
 
-🏢 **Arquitetura Enterprise-grade com padrões Netflix/Spotify**
+🏢 **Enterprise-grade Architecture with Netflix/Spotify patterns**
 
-[![Tests](https://img.shields.io/badge/tests-73%20passing-brightgreen)](#-testes)
-[![Coverage](https://img.shields.io/badge/coverage-44%25-yellow)](#-cobertura)
-[![Clean Architecture](https://img.shields.io/badge/architecture-clean-blue)](#-arquitetura-clean)
-[![Python](https://img.shields.io/badge/python-3.10%2B-blue)](#-instalação)
+[![Tests](https://img.shields.io/badge/tests-73%20passing-brightgreen)](#-testing)
+[![Coverage](https://img.shields.io/badge/coverage-44%25-yellow)](#-coverage)
+[![Clean Architecture](https://img.shields.io/badge/architecture-clean-blue)](#-clean-architecture)
+[![Python](https://img.shields.io/badge/python-3.10%2B-blue)](#-installation)
 
-## 🚀 Visão Geral
+## 🚀 Overview
 
-Scraper universal do Medium construído com **Clean Architecture**, **SOLID Principles** e **Design Patterns** utilizados por empresas como Netflix e Spotify. Suporta qualquer publicação do Medium com descoberta inteligente de posts e interface visual moderna.
+Universal Medium scraper built with **Clean Architecture**, **SOLID Principles**, and **Design Patterns** used by companies like Netflix and Spotify. Supports any Medium publication with intelligent post discovery and modern visual interface.
 
-### ✨ Novidades v2.0
+### ✨ What's New in v2.0
 
-- 🎨 **Interface Visual Melhorada**: Loader animado com fases de progresso
-- 🌐 **Domínios Customizados**: Suporte completo para `.engineering`, `.tech`, etc.
-- 📊 **Progress Tracking**: Barra de progresso em tempo real
-- 🧪 **73 Testes**: Suíte completa de testes unitários e integração
-- 📝 **YAML Config**: Sistema de configuração flexível
-- 🚀 **Bulk Collections**: Colete de múltiplas fontes simultaneamente
+- 🎨 **Enhanced Visual Interface**: Animated loader with progress phases
+- 🌐 **Custom Domains**: Full support for `.engineering`, `.tech`, etc.
+- 📊 **Progress Tracking**: Real-time progress bars
+- 🧪 **73 Tests**: Complete suite of unit and integration tests
+- 📝 **YAML Config**: Flexible configuration system
+- 🚀 **Bulk Collections**: Collect from multiple sources simultaneously
 
-## 🏗️ Arquitetura Clean
+## 🏗️ Clean Architecture
 
-### Camadas
+### Layers
 
 ```
 src/
-├── domain/               # Regras de negócio puras
-│   ├── entities/         # Entidades de domínio (Post, Author, Publication)
-│   ├── repositories/     # Interfaces dos repositórios
-│   └── services/         # Serviços de domínio
-├── application/          # Casos de uso da aplicação
-│   └── use_cases/        # Implementação dos casos de uso
-├── infrastructure/       # Adaptadores externos
-│   ├── adapters/         # Adaptadores para APIs externas (GraphQL)
-│   ├── config/           # Gerenciamento de configuração YAML
-│   └── external/         # Implementações concretas
-└── presentation/         # Interface do usuário
-    └── cli.py            # Controller CLI com Rich UI
+├── domain/               # Pure business rules
+│   ├── entities/         # Domain entities (Post, Author, Publication)
+│   ├── repositories/     # Repository interfaces
+│   └── services/         # Domain services
+├── application/          # Application use cases
+│   └── use_cases/        # Use case implementations
+├── infrastructure/       # External adapters
+│   ├── adapters/         # External API adapters (GraphQL)
+│   ├── config/           # YAML configuration management
+│   └── external/         # Concrete implementations
+└── presentation/         # User interface
+    └── cli.py            # CLI Controller with Rich UI
 ```
 
-### Padrões Implementados
+### Implemented Patterns
 
-- **Repository Pattern**: Abstração de acesso a dados
-- **Strategy Pattern**: Diferentes estratégias de descoberta
-- **Command Pattern**: Casos de uso como comandos
-- **Adapter Pattern**: Integração com API externa
-- **Dependency Injection**: Inversão de dependências
-- **Factory Pattern**: Criação de configurações
-- **Observer Pattern**: Sistema de progress tracking
+- **Repository Pattern**: Data access abstraction
+- **Strategy Pattern**: Different discovery strategies
+- **Command Pattern**: Use cases as commands
+- **Adapter Pattern**: External API integration
+- **Dependency Injection**: Dependency inversion
+- **Factory Pattern**: Configuration creation
+- **Observer Pattern**: Progress tracking system
 
-## 🎯 Recursos
+## 🎯 Features
 
 ### Core Features
-- ✅ **Descoberta Inteligente**: Auto-discovery + IDs conhecidos + fallback
-- ✅ **Domínios Customizados**: Netflix, Kickstarter, etc. 
-- ✅ **Perfis de Usuário**: @SkyscannerEng, @TinderEng, etc.
-- ✅ **Publicações Medium**: Pinterest, Airbnb, Uber, etc.
-- ✅ **Paginação Completa**: Coleta TODOS os posts disponíveis
-- ✅ **Rate Limiting**: Respeita limites da API
+- ✅ **Intelligent Discovery**: Auto-discovery + known IDs + fallback
+- ✅ **Custom Domains**: Netflix, Kickstarter, etc. 
+- ✅ **User Profiles**: @SkyscannerEng, @TinderEng, etc.
+- ✅ **Medium Publications**: Pinterest, Airbnb, Uber, etc.
+- ✅ **Complete Pagination**: Collects ALL available posts
+- ✅ **Rate Limiting**: Respects API limits
 
 ### Interface & UX  
-- 🎨 **Rich CLI**: Interface visual moderna com cores e emojis
-- 📊 **Progress Bars**: Loader animado com fases detalhadas
+- 🎨 **Rich CLI**: Modern visual interface with colors and emojis
+- 📊 **Progress Bars**: Animated loader with detailed phases
 - 🎭 **Multiple Formats**: Table, JSON, IDs
-- 📁 **Auto Output**: Salvamento automático em `outputs/`
-- 🔄 **Bulk Operations**: Processamento em lote
+- 📁 **Auto Output**: Automatic saving to `outputs/`
+- 🔄 **Bulk Operations**: Batch processing
 
-### Configuração & Flexibilidade
-- 📝 **YAML Sources**: Configure fontes reutilizáveis
-- 🎛️ **Flexible Parameters**: Limite, formato, modo, etc.
-- 🔧 **Custom Domains**: Suporte automático para qualquer domínio
-- 📦 **Bulk Collections**: Grupos de fontes predefinidos
-## 🛠️ Instalação
+### Configuration & Flexibility
+- 📝 **YAML Sources**: Configure reusable sources
+- 🎛️ **Flexible Parameters**: Limit, format, mode, etc.
+- 🔧 **Custom Domains**: Automatic support for any domain
+- 📦 **Bulk Collections**: Predefined source groups
+
+## 🛠️ Installation
 
 ```bash
-# Clone o repositório
+# Clone the repository
 git clone <repo-url>
 cd medium-scrap
 
-# Instale com uv
+# Install with uv
 uv sync
 ```
 
-## � Uso
+## 📖 Usage
 
-### Comandos Básicos
+### Basic Commands
 
 ```bash
-# Scraping rápido do Netflix
+# Quick Netflix scraping
 python main.py --publication netflix --limit 5
 
-# Auto-descoberta (modo produção)
+# Auto-discovery (production mode)
 python main.py --publication pinterest --auto-discover --skip-session --format json
 
-# IDs customizados
+# Custom IDs
 python main.py --publication netflix --custom-ids "ac15cada49ef,64c786c2a3ac"
 
-# Qualquer publicação
+# Any publication
 python main.py --publication unknown-blog --auto-discover --limit 10
 ```
 
-### Opções Completas
+### Complete Options
 
 ```bash
--p, --publication TEXT         Nome da publicação (netflix, pinterest, ou qualquer)
--o, --output TEXT              Arquivo para salvar resultados
--f, --format [table|json|ids]  Formato de saída
---custom-ids TEXT              Lista de IDs específicos (separados por vírgula)
---skip-session                 Pular inicialização de sessão (mais rápido)
---limit INTEGER                Número máximo de posts
---auto-discover                Forçar modo auto-descoberta (pronto para produção)
---help                         Mostrar ajuda
+-p, --publication TEXT         Publication name (netflix, pinterest, or any)
+-o, --output TEXT              File to save results
+-f, --format [table|json|ids]  Output format
+--custom-ids TEXT              Specific IDs list (comma-separated)
+--skip-session                 Skip session initialization (faster)
+--limit INTEGER                Maximum number of posts
+--auto-discover                Force auto-discovery mode (production ready)
+--help                         Show help
 ```
 
-## 🧪 Testes
+## 🧪 Testing
 
 ```bash
-# Todos os testes
+# All tests
 python -m pytest tests/ -v
 
-# Apenas testes unitários
+# Unit tests only
 python -m pytest tests/unit/ -v
 
-# Apenas testes de integração
+# Integration tests only
 python -m pytest tests/integration/ -v
 ```
 
-## 📋 Publicações Suportadas
+## 📋 Supported Publications
 
-### Pré-configuradas
+### Pre-configured
 - **Netflix Tech Blog** (`netflix`)
 - **Pinterest Engineering** (`pinterest`)
 
-### Descoberta Universal
-- Qualquer publicação do Medium pode ser descoberta automaticamente
-- Use `--auto-discover` para publicações não pré-configuradas
+### Universal Discovery
+- Any Medium publication can be automatically discovered
+- Use `--auto-discover` for non-preconfigured publications
 
-## 🏢 Padrões Enterprise
+## 🏢 Enterprise Patterns
 
-### Princípios SOLID
+### SOLID Principles
 
-- **Single Responsibility**: Cada classe tem uma responsabilidade
-- **Open/Closed**: Extensível sem modificação
-- **Liskov Substitution**: Subtipos substituem tipos base
-- **Interface Segregation**: Interfaces específicas
-- **Dependency Inversion**: Dependências abstratas
+- **Single Responsibility**: Each class has one responsibility
+- **Open/Closed**: Extensible without modification
+- **Liskov Substitution**: Subtypes replace base types
+- **Interface Segregation**: Specific interfaces
+- **Dependency Inversion**: Abstract dependencies
 
 ### Clean Architecture
 
-- **Domain Layer**: Regras de negócio independentes
-- **Application Layer**: Casos de uso da aplicação
-- **Infrastructure Layer**: Detalhes de implementação
-- **Presentation Layer**: Interface do usuário
+- **Domain Layer**: Framework-independent business rules
+- **Application Layer**: Application use cases
+- **Infrastructure Layer**: Implementation details
+- **Presentation Layer**: User interface
 
-## 🚀 Exemplos de Uso
+## 🚀 Usage Examples
 
-### Exemplo 1: Scraping Básico
+### Example 1: Basic Scraping
 ```bash
 python main.py --publication netflix --limit 3 --format table
 ```
 
-### Exemplo 2: Modo Produção
+### Example 2: Production Mode
 ```bash
 python main.py --publication pinterest --auto-discover --skip-session --format json --output results.json
 ```
 
-### Exemplo 3: IDs Específicos
+### Example 3: Specific IDs
 ```bash
 python main.py --publication netflix --custom-ids "ac15cada49ef,64c786c2a3ac" --format json
 ```
 
-## 📁 Estrutura do Projeto
+## 📁 Project Structure
 
 ```
 medium-scrap/
 ├── src/
 │   ├── domain/
 │   │   ├── entities/
-│   │   │   └── publication.py      # Entidades de domínio
+│   │   │   └── publication.py      # Domain entities
 │   │   ├── repositories/
-│   │   │   └── base.py             # Interfaces dos repositórios
+│   │   │   └── base.py             # Repository interfaces
 │   │   └── services/
-│   │       └── publication_service.py  # Serviços de domínio
+│   │       └── publication_service.py  # Domain services
 │   ├── application/
 │   │   └── use_cases/
-│   │       └── scrape_posts.py     # Casos de uso principais
+│   │       └── scrape_posts.py     # Main use cases
 │   ├── infrastructure/
 │   │   ├── adapters/
-│   │   │   └── medium_api_adapter.py   # Adaptador da API
+│   │   │   └── medium_api_adapter.py   # API adapter
 │   │   └── external/
-│   │       └── repositories.py     # Repositórios concretos
+│   │       └── repositories.py     # Concrete repositories
 │   └── presentation/
-│       └── cli.py                  # Interface CLI
+│       └── cli.py                  # CLI interface
 ├── tests/
-│   ├── unit/                      # Testes unitários
-│   └── integration/               # Testes de integração
-├── main.py                        # Ponto de entrada
-├── pyproject.toml                 # Configuração do projeto
-└── README.md                      # Esta documentação
+│   ├── unit/                      # Unit tests
+│   └── integration/               # Integration tests
+├── main.py                        # Entry point
+├── pyproject.toml                 # Project configuration
+└── README.md                      # This documentation
 ```
 
-## 🎯 Benefícios da Arquitetura
+## 🎯 Architecture Benefits
 
-1. **Testabilidade**: Testes isolados para cada camada
-2. **Manutenibilidade**: Separação clara de responsabilidades
-3. **Extensibilidade**: Fácil adição de novas funcionalidades
-4. **Escalabilidade**: Arquitetura preparada para crescimento
-5. **Qualidade**: Padrões utilizados por empresas tier-1
+1. **Testability**: Isolated tests for each layer
+2. **Maintainability**: Clear separation of responsibilities
+3. **Extensibility**: Easy addition of new features
+4. **Scalability**: Architecture prepared for growth
+5. **Quality**: Standards used by tier-1 companies
 
-## 📄 Licença
+## 📄 License
 
-Este projeto está licenciado sob a [Licença MIT](LICENSE) - veja o arquivo [LICENSE](LICENSE) para detalhes completos.
+This project is licensed under the [MIT License](LICENSE) - see the [LICENSE](LICENSE) file for complete details.
 
-### Resumo da Licença MIT
-- ✅ **Uso Comercial**: Permitido uso em projetos comerciais
-- ✅ **Modificação**: Pode modificar o código fonte
-- ✅ **Distribuição**: Pode distribuir versões modificadas
-- ✅ **Uso Privado**: Pode usar para projetos privados
-- ⚠️ **Responsabilidade**: Software fornecido "como está", sem garantias
+### MIT License Summary
+- ✅ **Commercial Use**: Allowed for commercial projects
+- ✅ **Modification**: Can modify source code
+- ✅ **Distribution**: Can distribute modified versions
+- ✅ **Private Use**: Can use for private projects
+- ⚠️ **Liability**: Software provided "as is", no warranties
 
 ---
 
-**Desenvolvido com Clean Architecture e padrões enterprise-grade** 🏢✨
+**Built with Clean Architecture and enterprise-grade patterns** 🏢✨
