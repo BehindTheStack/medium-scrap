@@ -38,7 +38,7 @@ def download_assets(assets: List[Dict], dest_dir: str) -> List[str]:
     return saved
 
 
-def persist_markdown_and_metadata(post, markdown: str, assets: List[Dict], output_dir: str) -> Dict[str, str]:
+def persist_markdown_and_metadata(post, markdown: str, assets: List[Dict], output_dir: str, *, code_blocks: Optional[List[Dict]] = None, classifier: Optional[Dict] = None) -> Dict[str, str]:
     """Persist markdown and JSON metadata for a post.
 
     post: domain Post entity (expects .id.value and .title)
@@ -71,7 +71,9 @@ def persist_markdown_and_metadata(post, markdown: str, assets: List[Dict], outpu
         'slug': getattr(post, 'slug', None),
         'author': getattr(getattr(post, 'author', None), 'name', None),
         'markdown': str(md_path),
-        'assets': saved_assets
+        'assets': saved_assets,
+        'code_blocks': code_blocks or [],
+        'classifier': classifier or {}
     }
 
     with open(json_path, 'w', encoding='utf-8') as f:

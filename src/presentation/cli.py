@@ -480,7 +480,10 @@ class CLIController:
 
                 try:
                     md, assets, code_blocks = content_extractor.html_to_markdown(html)
-                    saved = persist_markdown_and_metadata(post, md, assets, str(publication_dir))
+                    classification = content_extractor.classify_technical(html, code_blocks)
+                    saved = persist_markdown_and_metadata(
+                        post, md, assets, str(publication_dir), code_blocks=code_blocks, classifier=classification
+                    )
                     self.console.print(f"[green]✅ Persisted post {post.id.value} -> {saved['markdown']}[/green]")
                 except Exception as e:
                     self.console.print(f"[yellow]⚠️ Failed to persist post {post.id.value}: {e}[/yellow]")

@@ -163,3 +163,37 @@ def html_to_markdown(html: str) -> Tuple[str, List[dict], List[dict]]:
 
 
 __all__ = ["html_to_markdown", "extract_code_blocks"]
+
+def classify_technical(html: str, code_blocks: List[dict]) -> dict:
+    """Simple heuristics-based technical classifier.
+
+    - If there are code blocks, it's likely technical.
+    - Look for technical keywords to boost score.
+
+    Returns: {'is_technical': bool, 'score': float, 'reasons': List[str]}
+    """
+    reasons: List[str] = []
+    score = 0.0
+
+    # Code blocks presence
+    if code_blocks:
+        reasons.append(f"code_blocks:{len(code_blocks)}")
+        score += min(0.6, 0.2 * len(code_blocks)) + 0.4
+
+    # Keyword heuristics
+    keywords = ['import ', 'def ', 'class ', 'function ', 'console.log', 'SELECT ', 'SELECT\n']
+    found_kw = 0
+    for kw in keywords:
+        if kw.lower() in html.lower():
+            found_kw += 1
+    if found_kw:
+        reasons.append(f"keywords:{found_kw}")
+        score += min(0.4, 0.1 * found_kw)
+
+    # Normalize score
+    score = max(0.0, min(1.0, score))
+    is_tech = score >= 0.3
+
+    return {"is_technical": is_tech, "score": round(score, 2), "reasons": reasons}
+
+__all__.append("classify_technical")
