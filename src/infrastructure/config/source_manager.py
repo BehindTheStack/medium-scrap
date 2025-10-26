@@ -48,6 +48,41 @@ class SourceConfigManager:
                 self._config_data = yaml.safe_load(f)
                 
         return self._config_data
+
+    def _save_config(self) -> None:
+        """Persist the in-memory configuration back to the YAML file."""
+        if self._config_data is None:
+            # Nothing to save
+            return
+
+        # Ensure directory exists
+        self.config_path.parent.mkdir(parents=True, exist_ok=True)
+
+        with open(self.config_path, 'w', encoding='utf-8') as f:
+            yaml.safe_dump(self._config_data, f, sort_keys=False, allow_unicode=True)
+
+    def add_or_update_source(self, source_key: str, source_data: Dict[str, Any]) -> None:
+        """Add a new source or update an existing one and persist changes.
+
+        source_data should contain keys: type, name, description, optional auto_discover, custom_domain
+        """
+        config = self._load_config() or {}
+
+        if 'sources' not in config or config['sources'] is None:
+            config['sources'] = {}
+
+        # Normalize booleans and required fields
+        entry = {
+            'type': source_data.get('type', 'publication'),
+            'name': source_data.get('name'),
+            'description': source_data.get('description', ''),
+            'auto_discover': bool(source_data.get('auto_discover', True)),
+            'custom_domain': bool(source_data.get('custom_domain', False))
+        }
+
+        config['sources'][source_key] = entry
+        self._config_data = config
+        self._save_config()
     
     def get_source(self, source_key: str) -> SourceConfig:
         """Get configuration for a specific source."""

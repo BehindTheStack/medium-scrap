@@ -475,7 +475,7 @@ class CLIController:
 
 
 # CLI Command Interface
-@click.command()
+@click.group(invoke_without_command=True)
 @click.option('--publication', '-p', help='Publication name (netflix, pinterest, or any publication)')
 @click.option('--source', '-s', help='Use configured source from YAML (e.g., --source netflix)')
 @click.option('--bulk', '-b', help='Run bulk collection (e.g., --bulk tech_giants)')
@@ -489,7 +489,8 @@ class CLIController:
 @click.option('--all', 'all_posts', is_flag=True, help='Collect ALL posts from publication (no limit)')
 @click.option('--auto-discover', is_flag=True, 
               help='Force auto-discovery mode (production ready)')
-def cli(publication, source, bulk, list_sources, output, format_type, custom_ids, skip_session, limit, all_posts, auto_discover):
+@click.pass_context
+def cli(ctx, publication, source, bulk, list_sources, output, format_type, custom_ids, skip_session, limit, all_posts, auto_discover):
     """
     Universal Medium Scraper - Enterprise Edition
     
@@ -530,6 +531,10 @@ def cli(publication, source, bulk, list_sources, output, format_type, custom_ids
     python main.py --publication netflix --all --skip-session --format json --output all_posts.json
     """
     
+    # If a subcommand was invoked, skip the main CLI wiring (allows subcommands to run without loading adapters)
+    if ctx.invoked_subcommand is not None:
+        return
+
     # Create controller first for potential source listing
     from ..infrastructure.adapters.medium_api_adapter import MediumApiAdapter
     from ..infrastructure.external.repositories import InMemoryPublicationRepository, MediumSessionRepository
@@ -598,6 +603,45 @@ def cli(publication, source, bulk, list_sources, output, format_type, custom_ids
         skip_session=skip_session,
         output_file=output
     )
+
+
+@cli.command('add-source')
+@click.option('--key', required=True, help='Key name to use in medium_sources.yaml (e.g. pinterest)')
+@click.option('--type', 'stype', default='publication', type=click.Choice(['publication', 'username']), help='Type: publication or username')
+@click.option('--name', required=True, help='Publication name, domain, or @username')
+@click.option('--description', default='', help='Short description for the source')
+@click.option('--auto-discover/--no-auto-discover', default=True, help='Enable auto-discover for this source')
+@click.option('--custom-domain/--no-custom-domain', default=False, help='Mark this source as a custom domain')
+@click.option('--yes', '-y', is_flag=True, help='Assume yes when overwriting an existing source')
+def add_source(key, stype, name, description, auto_discover, custom_domain, yes):
+    """Add or update a source in `medium_sources.yaml`.
+
+    Example:
+      python main.py add-source --key pinterest --type publication --name pinterest --description "Pinterest Engineering" --auto-discover
+    """
+    try:
+        manager = SourceConfigManager()
+        exists = manager.validate_source(key)
+
+        if exists and not yes:
+            confirm = click.confirm(f"Source '{key}' already exists. Overwrite?", default=False)
+            if not confirm:
+                click.echo("Cancelled — no changes made.")
+                return
+
+        manager.add_or_update_source(
+            source_key=key,
+            source_data={
+                'type': stype,
+                'name': name,
+                'description': description,
+                'auto_discover': auto_discover,
+                'custom_domain': custom_domain
+            }
+        )
+        click.echo(f"✅ Source '{key}' added/updated in {manager.config_path}")
+    except Exception as e:
+        click.echo(f"❌ Failed to add/update source: {e}")
 
 
 if __name__ == "__main__":
