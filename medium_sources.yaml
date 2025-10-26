@@ -4,7 +4,7 @@ sources:
     name: netflix
     description: Netflix Technology Blog
     auto_discover: true
-    custom_domain: false
+    custom_domain: true
   wise:
     type: publication
     name: wise-engineering
