@@ -7,7 +7,7 @@ import httpx
 import time
 import re
 from typing import List, Optional, Dict, Any
-from datetime import datetime
+from datetime import datetime, timezone
 
 from ...domain.entities.publication import (
     Post, PostId, PublicationConfig, PublicationType, Author, PublicationId
@@ -568,9 +568,9 @@ class MediumApiAdapter(PostRepository):
         # Parse timestamps
         published_timestamp = post_data.get("firstPublishedAt")
         latest_timestamp = post_data.get("latestPublishedAt")
-        
-        published_at = datetime.fromtimestamp(published_timestamp / 1000) if published_timestamp else datetime.now()
-        latest_published_at = datetime.fromtimestamp(latest_timestamp / 1000) if latest_timestamp else None
+
+        published_at = datetime.fromtimestamp(published_timestamp / 1000, tz=timezone.utc) if published_timestamp else datetime.now(timezone.utc)
+        latest_published_at = datetime.fromtimestamp(latest_timestamp / 1000, tz=timezone.utc) if latest_timestamp else None
         
         subtitle = post_data.get("extendedPreviewContent", {}).get("subtitle", "")
         

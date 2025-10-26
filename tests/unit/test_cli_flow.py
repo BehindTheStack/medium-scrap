@@ -9,7 +9,7 @@ from src.infrastructure.config.source_manager import SourceConfigManager
 from src.domain.entities.publication import PublicationId, PublicationType, PublicationConfig, PostId
 from src.application.use_cases.scrape_posts import ScrapePostsResponse
 from src.domain.entities.publication import Author, Post
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 def make_post():
@@ -18,7 +18,7 @@ def make_post():
         title='T',
         slug='s',
         author=Author(id='a', name='n', username='u'),
-        published_at=datetime.utcnow(),
+    published_at=datetime.now(timezone.utc),
         reading_time=1.0
     )
 

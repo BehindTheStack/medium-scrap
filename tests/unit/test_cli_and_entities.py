@@ -1,5 +1,5 @@
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -13,7 +13,7 @@ from src.application.use_cases.scrape_posts import ScrapePostsResponse
 def make_sample_post():
     pid = PostId('aaaaaaaaaaaa')
     author = Author(id='auth1', name='Author One', username='authone')
-    published = datetime.utcnow() - timedelta(days=2)
+    published = datetime.now(timezone.utc) - timedelta(days=2)
     post = Post(
         id=pid,
         title='Test Post',

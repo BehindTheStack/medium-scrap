@@ -1,5 +1,5 @@
 from unittest.mock import MagicMock
-from datetime import datetime
+from datetime import datetime, timezone
 
 from src.infrastructure.adapters.medium_api_adapter import MediumApiAdapter
 from src.domain.entities.publication import PostId
@@ -12,7 +12,7 @@ def make_post_object():
         title='T',
         slug='s',
         author=Author(id='a', name='n', username='u'),
-        published_at=datetime.utcnow(),
+    published_at=datetime.now(timezone.utc),
         reading_time=1.0
     )
 

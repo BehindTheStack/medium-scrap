@@ -1,5 +1,5 @@
 from unittest.mock import patch, MagicMock
-from datetime import datetime
+from datetime import datetime, timezone
 
 from src.infrastructure.adapters.medium_api_adapter import MediumApiAdapter
 from src.domain.entities.publication import PostId
@@ -24,7 +24,7 @@ def test_build_queries_and_parse_post():
         'id': 'bbbbbbbbbbbb',
         'title': 'Title',
         'uniqueSlug': 'slug',
-        'firstPublishedAt': int(datetime.utcnow().timestamp() * 1000),
+    'firstPublishedAt': int(datetime.now(timezone.utc).timestamp() * 1000),
         'readingTime': 3.5,
         'creator': {'id': 'a', 'name': 'Auth', 'username': 'auth'},
         'extendedPreviewContent': {'subtitle': 'sub'}
