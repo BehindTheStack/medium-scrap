@@ -1,191 +1,161 @@
-# Medium Sources Configuration
-# This file contains predefined Medium publications and users for easy scraping
-# Usage: python main.py --config-source <source_name>
-
 sources:
-  # Technology & Engineering - Baseado no seu histórico
   netflix:
     type: publication
     name: netflix
-    description: "Netflix Technology Blog"
+    description: Netflix Technology Blog
     auto_discover: true
     custom_domain: false
-    
   wise:
     type: publication
     name: wise-engineering
-    description: "Wise Engineering - Fintech and money transfer technology"
+    description: Wise Engineering - Fintech and money transfer technology
     auto_discover: true
     custom_domain: false
-    
   tinder:
     type: publication
     name: tinder
-    description: "Tinder Engineering - Dating app technology"
+    description: Tinder Engineering - Dating app technology
     auto_discover: true
     custom_domain: false
-    
   skyscanner:
-    type: username  
-    name: "@SkyscannerEng"
-    description: "Skyscanner Engineering - Travel tech insights"
+    type: username
+    name: '@SkyscannerEng'
+    description: Skyscanner Engineering - Travel tech insights
     auto_discover: true
     custom_domain: false
-    
   airbnb:
     type: publication
     name: airbnb-engineering
-    description: "Airbnb Engineering & Data Science"
+    description: Airbnb Engineering & Data Science
     auto_discover: true
     custom_domain: false
-    
   kickstarter:
     type: publication
     name: kickstarter.engineering
-    description: "Kickstarter Engineering - Building crowdfunding technology"
+    description: Kickstarter Engineering - Building crowdfunding technology
     auto_discover: true
     custom_domain: true
-    
   lyft:
     type: publication
     name: eng.lyft.com
-    description: "Lyft Engineering - Ridesharing technology"
+    description: Lyft Engineering - Ridesharing technology
     auto_discover: true
     custom_domain: true
-    
   medium:
     type: publication
     name: medium.engineering
-    description: "Medium Engineering - Platform and publishing technology"
+    description: Medium Engineering - Platform and publishing technology
     auto_discover: true
     custom_domain: true
-    
   nytimes:
     type: publication
     name: open.nytimes.com
-    description: "New York Times Open - News technology and journalism"
+    description: New York Times Open - News technology and journalism
     auto_discover: true
     custom_domain: true
-    
   olx:
     type: publication
     name: tech.olx.com
-    description: "OLX Technology - Classifieds and marketplace tech"
+    description: OLX Technology - Classifieds and marketplace tech
     auto_discover: true
     custom_domain: true
-    
   deezer:
     type: publication
     name: deezer.io
-    description: "Deezer Engineering - Music streaming technology"
+    description: Deezer Engineering - Music streaming technology
     auto_discover: true
     custom_domain: true
-    
-  # Additional Tech Companies
   engineering:
     type: publication
     name: freecodecamp
-    description: "FreeCodeCamp - Programming tutorials and tips"
+    description: FreeCodeCamp - Programming tutorials and tips
     auto_discover: true
     custom_domain: false
-    
   uber:
     type: publication
     name: uber-engineering
-    description: "Uber Engineering Blog"
+    description: Uber Engineering Blog
     auto_discover: true
     custom_domain: false
-    
-  # Startups & Business
   startup:
     type: publication
     name: hackernoon
-    description: "Hacker Noon - Tech stories and tutorials"
+    description: Hacker Noon - Tech stories and tutorials
     auto_discover: true
     custom_domain: false
-    
   medium-staff:
     type: publication
     name: medium-staff
-    description: "Official Medium Staff picks"
+    description: Official Medium Staff picks
     auto_discover: true
     custom_domain: false
-    
-  # Data Science & AI
   towards-data-science:
     type: publication
     name: towards-data-science
-    description: "Towards Data Science - ML, AI, and Data insights"
+    description: Towards Data Science - ML, AI, and Data insights
     auto_discover: true
     custom_domain: false
-    
-  # Design & UX
   ux-design:
     type: publication
     name: ux-design
-    description: "UX Design - User experience articles"
+    description: UX Design - User experience articles
     auto_discover: true
     custom_domain: false
-    
-  # Individual Users Examples
   tinder-eng:
     type: username
-    name: "@TinderEng"
-    description: "Tinder Engineering Team"
+    name: '@TinderEng'
+    description: Tinder Engineering Team
     auto_discover: true
     custom_domain: false
-
-# Default settings that apply to all sources unless overridden
+  pinterest:
+    type: publication
+    name: pinterest
+    description: Pinterest Engineering
+    auto_discover: true
+    custom_domain: false
 defaults:
   limit: 50
   skip_session: true
   format: json
-  output_dir: "outputs"
-  
-# Bulk operations - collect from multiple sources at once  
+  output_dir: outputs
 bulk_collections:
   tech_giants:
-    description: "All major tech company blogs - baseado no seu histórico"
+    description: All major tech company blogs - baseado no seu histórico
     sources:
-      - netflix
-      - airbnb
-      - uber
-      - lyft
-      - wise
-      - tinder
-      - skyscanner
-      
+    - netflix
+    - airbnb
+    - uber
+    - lyft
+    - wise
+    - tinder
+    - skyscanner
   custom_domains:
-    description: "All custom domain publications you tested"
+    description: All custom domain publications you tested
     sources:
-      - kickstarter
-      - lyft
-      - medium
-      - nytimes
-      - olx
-      - deezer
-      
+    - kickstarter
+    - lyft
+    - medium
+    - nytimes
+    - olx
+    - deezer
   fintech_and_commerce:
-    description: "Financial technology and e-commerce"
+    description: Financial technology and e-commerce
     sources:
-      - wise
-      - olx
-      - tinder
-      
+    - wise
+    - olx
+    - tinder
   media_and_content:
-    description: "Media, content and publishing platforms"
+    description: Media, content and publishing platforms
     sources:
-      - medium
-      - nytimes
-      - deezer
-      
+    - medium
+    - nytimes
+    - deezer
   data_science:
-    description: "Data Science and AI focused content"
+    description: Data Science and AI focused content
     sources:
-      - towards-data-science
-      
+    - towards-data-science
   startup_ecosystem:
-    description: "Startup and business content"
+    description: Startup and business content
     sources:
-      - startup
-      - medium-staff
+    - startup
+    - medium-staff
