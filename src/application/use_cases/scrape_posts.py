@@ -18,6 +18,7 @@ class ScrapePostsRequest:
     custom_post_ids: Optional[List[str]] = None
     auto_discover: bool = False
     skip_session: bool = False
+    mode: str = 'metadata'
 
 
 @dataclass
@@ -77,6 +78,14 @@ class ScrapePostsUseCase:
                     prefer_auto_discovery=request.auto_discover
                 )
                 discovery_method = self._determine_discovery_method(config, request.auto_discover)
+
+            # If full content is requested, enrich posts with HTML
+            if request.mode in ('full', 'technical') and posts:
+                try:
+                    posts = self._post_discovery_service.enrich_posts_with_html(posts, config)
+                except Exception:
+                    # Ignore enrichment failures
+                    pass
             
             return ScrapePostsResponse(
                 posts=posts,

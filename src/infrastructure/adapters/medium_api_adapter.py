@@ -584,3 +584,26 @@ class MediumApiAdapter(PostRepository):
             subtitle=subtitle,
             latest_published_at=latest_published_at
         )
+
+    def fetch_post_html(self, post: Post, config: PublicationConfig) -> Optional[str]:
+        """Fetch the full HTML content for a given post URL.
+
+        Uses a best-effort approach: for medium-hosted posts we use the short 'p' URL; for custom domains we
+        try the domain + slug path.
+        """
+        try:
+            if config.is_custom_domain:
+                url = f"https://{config.domain}/{post.slug}"
+            else:
+                # Use the short 'p' URL which reliably redirects to the canonical post on medium
+                url = f"https://medium.com/p/{post.id.value}"
+
+            with httpx.Client(verify=False, timeout=30.0, follow_redirects=True) as client:
+                response = client.get(url, headers={"User-Agent": self._base_headers.get("user-agent", "")})
+
+            if response.status_code == 200:
+                return response.text
+        except Exception:
+            return None
+
+        return None

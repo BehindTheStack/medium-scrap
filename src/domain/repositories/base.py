@@ -51,6 +51,11 @@ class PostRepository(ABC):
         """Get posts directly from publication feed"""
         pass
 
+    @abstractmethod
+    def fetch_post_html(self, post: Post, config: PublicationConfig) -> Optional[str]:
+        """Fetch the full HTML content for a given post. Returns HTML string or None."""
+        pass
+
 
 class SessionRepository(ABC):
     """

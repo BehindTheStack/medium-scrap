@@ -10,11 +10,7 @@ from typing import List, Optional
 from rich.console import Console
 from rich.table import Table
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeElapsedColumn
-from rich.live import Live
-from rich.panel import Panel
-from rich.text import Text
 import time
-import threading
 
 from ..application.use_cases.scrape_posts import (
     ScrapePostsUseCase, ScrapePostsRequest, ScrapePostsResponse
@@ -182,7 +178,8 @@ class CLIController:
         limit: Optional[int] = None,
         format_type: str = "table", 
         output_file: Optional[str] = None,
-        all_posts: bool = False
+        all_posts: bool = False,
+        mode: str = 'metadata'
     ) -> None:
         """Scrape posts using a configured source"""
         try:
@@ -224,7 +221,8 @@ class CLIController:
                     custom_ids=None,
                     auto_discover=source_config.auto_discover,
                     skip_session=defaults.get('skip_session', True),
-                    output_file=output_file
+                    output_file=output,
+                    mode=mode
                 )
             else:
                 # Use normal flow for medium-hosted publications
@@ -235,7 +233,8 @@ class CLIController:
                     custom_ids=None,
                     auto_discover=source_config.auto_discover,
                     skip_session=defaults.get('skip_session', True),
-                    output_file=output_file
+                    output_file=output_file,
+                    mode=mode
                 )
             
         except KeyError as e:
@@ -246,7 +245,8 @@ class CLIController:
         self,
         bulk_key: str,
         limit: Optional[int] = None,
-        format_type: str = "json"
+        format_type: str = "json",
+        mode: str = 'metadata'
     ) -> None:
         """Scrape posts from multiple sources in a bulk collection"""
         try:
@@ -289,7 +289,8 @@ class CLIController:
                         source_key=source_key,
                         limit=limit,
                         format_type=format_type,
-                        output_file=str(output_dir / f"{source_key}_posts.json")
+                        output_file=str(output_dir / f"{source_key}_posts.json"),
+                        mode=mode
                     )
                     
                     bulk_progress.update(bulk_task, completed=i + 1)
@@ -311,7 +312,8 @@ class CLIController:
         custom_ids: Optional[str] = None,
         auto_discover: bool = False,
         skip_session: bool = False,
-        output_file: Optional[str] = None
+        output_file: Optional[str] = None,
+        mode: str = 'metadata'
     ) -> None:
         """Main command handler for post scraping"""
         
@@ -331,6 +333,10 @@ class CLIController:
             self.console.print("🤖 [bold green]AUTO-DISCOVERY MODE:[/bold green] Production ready")
         else:
             self.console.print("🔍 [bold blue]HYBRID MODE:[/bold blue] Auto-discovery + fallback")
+
+        # Print selected preset/mode (for future behavior mapping)
+        if mode:
+            self.console.print(f"⚙️ [bold]Mode:[/bold] {mode}")
         
         # Create request
         request = ScrapePostsRequest(
@@ -338,7 +344,8 @@ class CLIController:
             limit=limit,
             custom_post_ids=custom_post_ids,
             auto_discover=auto_discover,
-            skip_session=skip_session
+            skip_session=skip_session,
+            mode=mode
         )
         
         # Execute use case with progress indicator
@@ -483,6 +490,8 @@ class CLIController:
 @click.option('--output', '-o', help='Output file for saving results')
 @click.option('--format', '-f', 'format_type', type=click.Choice(['table', 'json', 'ids']), 
               default='table', help='Output format')
+@click.option('--mode', '-m', 'mode', type=click.Choice(['ids', 'metadata', 'full', 'technical']),
+              default='metadata', help='Operation mode/preset (ids|metadata|full|technical)')
 @click.option('--custom-ids', help='Comma-separated list of specific post IDs')
 @click.option('--skip-session', is_flag=True, help='Skip session initialization (faster)')
 @click.option('--limit', type=int, help='Maximum number of posts to collect')
@@ -490,7 +499,7 @@ class CLIController:
 @click.option('--auto-discover', is_flag=True, 
               help='Force auto-discovery mode (production ready)')
 @click.pass_context
-def cli(ctx, publication, source, bulk, list_sources, output, format_type, custom_ids, skip_session, limit, all_posts, auto_discover):
+def cli(ctx, publication, source, bulk, list_sources, output, format_type, mode, custom_ids, skip_session, limit, all_posts, auto_discover):
     """
     Universal Medium Scraper - Enterprise Edition
     
@@ -555,7 +564,34 @@ def cli(ctx, publication, source, bulk, list_sources, output, format_type, custo
     )
     
     controller = CLIController(scrape_posts_use_case)
-    
+    # Map simple legacy cues to presets when user didn't explicitly change mode
+    # If user asked for ids format or provided custom IDs, prefer the 'ids' preset
+    if mode == 'metadata':
+        if format_type == 'ids' or (custom_ids and custom_ids.strip()):
+            mode = 'ids'
+
+    # Validate and coerce mode/format combinations (simple, low-maintenance rules)
+    effective_mode = mode
+    effective_format = format_type
+
+    # 1) mode 'ids' only makes sense with format 'ids' => coerce format
+    if effective_mode == 'ids' and effective_format != 'ids':
+        click.echo(f"⚠️  Mode 'ids' selected but format='{effective_format}' was requested; forcing --format ids for consistency.")
+        effective_format = 'ids'
+
+    # 2) format 'md' implies full content; if user didn't request full/technical, switch to 'full'
+    if effective_format == 'md' and effective_mode not in ('full', 'technical'):
+        click.echo(f"⚠️  Format 'md' requires full content. Switching mode '{effective_mode}' -> 'full'.")
+        effective_mode = 'full'
+
+    # 3) warn when asking for full/technical but choosing table output (table shows summary only)
+    if effective_mode in ('full', 'technical') and effective_format == 'table':
+        click.echo("⚠️  Mode '{0}' produces full content; --format table shows only a summary in the terminal.\n    Consider using --format json or --format md to persist full content.".format(effective_mode))
+
+    # Apply the effective values forward
+    mode = effective_mode
+    format_type = effective_format
+
     # Handle source listing
     if list_sources:
         controller.list_sources()
@@ -566,7 +602,8 @@ def cli(ctx, publication, source, bulk, list_sources, output, format_type, custo
         controller.scrape_bulk_collection(
             bulk_key=bulk,
             limit=limit,
-            format_type=format_type
+            format_type=format_type,
+            mode=mode
         )
         return
     
@@ -577,7 +614,8 @@ def cli(ctx, publication, source, bulk, list_sources, output, format_type, custo
             limit=limit,
             format_type=format_type,
             output_file=output,
-            all_posts=all_posts
+            all_posts=all_posts,
+            mode=mode
         )
         return
     
@@ -601,7 +639,8 @@ def cli(ctx, publication, source, bulk, list_sources, output, format_type, custo
         custom_ids=custom_ids,
         auto_discover=auto_discover,
         skip_session=skip_session,
-        output_file=output
+        output_file=output,
+        mode=mode
     )
 
 

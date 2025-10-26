@@ -47,6 +47,20 @@ class PostDiscoveryService:
             posts = self._post_repository.get_posts_by_ids(known_ids, config)
             if posts:
                 return posts
+
+            def enrich_posts_with_html(self, posts: List[Post], config: PublicationConfig) -> List[Post]:
+                """Enrich a list of posts by fetching their full HTML content via the repository."""
+                enriched = []
+                for post in posts:
+                    try:
+                        html = self._post_repository.fetch_post_html(post, config)
+                        if html:
+                            post.content_html = html
+                    except Exception:
+                        # Ignore enrichment failures and continue
+                        pass
+                    enriched.append(post)
+                return enriched
         
         # Strategy 3: Publication feed (last resort)
         try:

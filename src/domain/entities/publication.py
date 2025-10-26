@@ -62,6 +62,7 @@ class Post:
     published_at: datetime
     reading_time: float
     subtitle: Optional[str] = None
+    content_html: Optional[str] = None
     latest_published_at: Optional[datetime] = None
     
     def __post_init__(self):
@@ -92,7 +93,8 @@ class Post:
             "published_at": self.published_at.isoformat(),
             "latest_published_at": self.latest_published_at.isoformat() if self.latest_published_at else None,
             "reading_time": self.reading_time,
-            "subtitle": self.subtitle
+            "subtitle": self.subtitle,
+            "content_html": self.content_html
         }
 
 
