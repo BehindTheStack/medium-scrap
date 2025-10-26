@@ -27,6 +27,7 @@ dependencies = [
     "pytest>=8.4.1",
     "pyyaml>=6.0.2",
     "requests>=2.32.5",
+    "vcrpy>=4.1.1",
     "pytest-cov>=6.2.1",
     "pytest-asyncio>=1.1.0",
 ]
@@ -64,7 +65,6 @@ markers = [
     "unit: marks tests as unit tests",
 ]
 
-# Coverage configuration
 [tool.coverage.run]
 source = ["src"]
 omit = [

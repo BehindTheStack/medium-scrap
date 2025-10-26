@@ -17,6 +17,8 @@ from ..application.use_cases.scrape_posts import (
 )
 from ..domain.entities.publication import Post
 from ..infrastructure.config.source_manager import SourceConfigManager
+from ..infrastructure import content_extractor
+from ..infrastructure.persistence import persist_markdown_and_metadata
 
 
 class AdvancedProgressLoader:
@@ -353,7 +355,7 @@ class CLIController:
         
         # Handle response
         if response.success:
-            self._handle_successful_response(response, format_type, output_file)
+            self._handle_successful_response(response, format_type, output_file, mode)
         else:
             self._handle_failed_response(response)
     
@@ -435,10 +437,11 @@ class CLIController:
         return response
     
     def _handle_successful_response(
-        self, 
-        response: ScrapePostsResponse, 
-        format_type: str, 
-        output_file: Optional[str]
+        self,
+        response: ScrapePostsResponse,
+        format_type: str,
+        output_file: Optional[str],
+        mode: str = 'metadata'
     ) -> None:
         """Handle successful scraping response"""
         self.console.print(f"✅ {response.total_posts_found} posts collected!")
@@ -462,6 +465,25 @@ class CLIController:
                 self.console.print(f"[green]✅ Saved to {output_file}[/green]")
             else:
                 self.console.print(ids_output)
+
+        # If the user requested full content or technical mode, persist per-post artifacts
+        if mode in ("full", "technical"):
+            defaults = self._config_manager.get_defaults()
+            output_base = defaults.get('output_dir', 'outputs')
+            publication_dir = Path(output_base) / (response.publication_config.name if response.publication_config else 'publication')
+            publication_dir.mkdir(parents=True, exist_ok=True)
+
+            for post in response.posts:
+                html = getattr(post, 'content_html', None)
+                if not html:
+                    continue
+
+                try:
+                    md, assets, code_blocks = content_extractor.html_to_markdown(html)
+                    saved = persist_markdown_and_metadata(post, md, assets, str(publication_dir))
+                    self.console.print(f"[green]✅ Persisted post {post.id.value} -> {saved['markdown']}[/green]")
+                except Exception as e:
+                    self.console.print(f"[yellow]⚠️ Failed to persist post {post.id.value}: {e}[/yellow]")
     
     def _handle_failed_response(self, response: ScrapePostsResponse) -> None:
         """Handle failed scraping response"""
@@ -488,7 +510,7 @@ class CLIController:
 @click.option('--bulk', '-b', help='Run bulk collection (e.g., --bulk tech_giants)')
 @click.option('--list-sources', is_flag=True, help='List all available configured sources')
 @click.option('--output', '-o', help='Output file for saving results')
-@click.option('--format', '-f', 'format_type', type=click.Choice(['table', 'json', 'ids']), 
+@click.option('--format', '-f', 'format_type', type=click.Choice(['table', 'json', 'ids', 'md']), 
               default='table', help='Output format')
 @click.option('--mode', '-m', 'mode', type=click.Choice(['ids', 'metadata', 'full', 'technical']),
               default='metadata', help='Operation mode/preset (ids|metadata|full|technical)')

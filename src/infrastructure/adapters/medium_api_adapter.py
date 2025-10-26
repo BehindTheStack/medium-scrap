@@ -3,7 +3,6 @@ Infrastructure Adapters - External System Integration
 Following Adapter Pattern and Dependency Inversion Principle
 """
 
-import httpx
 import time
 import re
 from typing import List, Optional, Dict, Any
@@ -13,6 +12,7 @@ from ...domain.entities.publication import (
     Post, PostId, PublicationConfig, PublicationType, Author, PublicationId
 )
 from ...domain.repositories.base import PostRepository, PublicationRepository, SessionRepository
+from ..http_transport import HTTPTransport, HttpxTransport
 
 
 class MediumApiAdapter(PostRepository):
@@ -21,7 +21,7 @@ class MediumApiAdapter(PostRepository):
     Implements Repository interface for external API access
     """
     
-    def __init__(self):
+    def __init__(self, transport: Optional[HTTPTransport] = None):
         self._base_headers = {
             "accept": "*/*",
             "content-type": "application/json",
@@ -33,26 +33,12 @@ class MediumApiAdapter(PostRepository):
             "sec-fetch-mode": "cors",
             "sec-fetch-site": "same-origin"
         }
+        # Allow injection of a transport for testability; default to HttpxTransport
+        self._transport = transport or HttpxTransport()
 
     def _safe_http_post(self, url: str, headers: Dict[str, str], payload: Dict[str, Any]):
-        """Perform an HTTP POST in a way that respects tests patching either httpx.post or httpx.Client.
-
-        Some tests patch `httpx.post`, others patch `httpx.Client`. When `httpx.Client` is patched with
-        a MagicMock it will not have a `__mro__` attribute like a real class. Detect that and prefer the
-        context-manager client in that case so test mocks are respected.
-        """
-        try:
-            # If httpx.Client is replaced by a MagicMock in tests it won't have __mro__.
-            if not hasattr(httpx.Client, "__mro__"):
-                with httpx.Client(verify=False, timeout=30.0) as client:
-                    return client.post(url, headers=headers, json=payload)
-
-            # Default to top-level helper which is convenient for simple mocking via httpx.post
-            return httpx.post(url, headers=headers, json=payload, verify=False, timeout=30.0)
-        except Exception:
-            # Last-resort: try client context manager
-            with httpx.Client(verify=False, timeout=30.0) as client:
-                return client.post(url, headers=headers, json=payload)
+        """Delegate POST to the injected transport for testable HTTP calls."""
+        return self._transport.post(url, headers=headers, json=payload)
     
     def get_posts_by_ids(self, post_ids: List[PostId], config: PublicationConfig) -> List[Post]:
         """Retrieve posts by their IDs using GraphQL API"""
@@ -238,10 +224,9 @@ class MediumApiAdapter(PostRepository):
                     url = f"https://medium.com/{config.id.value}?page={page}"
             
             try:
-                with httpx.Client(verify=False, timeout=30.0, follow_redirects=True) as client:
-                    response = client.get(url, headers={
-                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-                    })
+                response = self._transport.get(url, headers={
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                }, follow_redirects=True)
                 
                 if response.status_code != 200:
                     break
@@ -598,8 +583,7 @@ class MediumApiAdapter(PostRepository):
                 # Use the short 'p' URL which reliably redirects to the canonical post on medium
                 url = f"https://medium.com/p/{post.id.value}"
 
-            with httpx.Client(verify=False, timeout=30.0, follow_redirects=True) as client:
-                response = client.get(url, headers={"User-Agent": self._base_headers.get("user-agent", "")})
+            response = self._transport.get(url, headers={"User-Agent": self._base_headers.get("user-agent", "")}, follow_redirects=True)
 
             if response.status_code == 200:
                 return response.text
