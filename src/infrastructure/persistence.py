@@ -9,6 +9,7 @@ from urllib.parse import urlparse
 
 from .http_transport import HttpxTransport
 from .indexer import update_index
+import re
 
 
 def _safe_filename(url: str) -> str:
@@ -90,9 +91,47 @@ def persist_markdown_and_metadata(post, markdown: str, assets: List[Dict], outpu
     md_path = out_dir / f"{base_name}.md"
     json_path = out_dir / f"{base_name}.json"
 
+    # Clean markdown to remove site navigation/footers introduced by HTML->MD conversion
+    def _clean_markdown(md: str) -> str:
+        """Light-weight, best-effort cleaning of converted markdown.
+
+        - Start at first H1 if present
+        - Remove common sign-in / nav short lines
+        - Trim repeated 'Written by' blocks and 'Responses' sections
+        - Collapse multiple blank lines
+        """
+        lines = md.splitlines()
+        # start at first H1
+        for i, ln in enumerate(lines):
+            if ln.strip().startswith('# '):
+                lines = lines[i:]
+                break
+
+        # drop obvious nav/footer short markers
+        nav_markers = ['Sitemap', 'Open in app', 'Sign up', 'Sign in', 'Medium Logo', '[Write]', '[Search]']
+        cleaned = []
+        for ln in lines:
+            if any(m.lower() in ln.lower() for m in nav_markers):
+                continue
+            if ln.strip() == '![]()':
+                continue
+            cleaned.append(ln)
+
+        text = '\n'.join(cleaned)
+        # remove duplicated author/byline panels and trailing responses/footer
+        if '\n## Written by' in text:
+            text = text.split('\n## Written by')[0]
+        if 'See all responses' in text:
+            text = text.split('See all responses')[0]
+        # collapse multiple blank lines
+        text = re.sub(r"\n{3,}", "\n\n", text)
+        return text.strip() + "\n"
+
+    cleaned_md = _clean_markdown(markdown)
+
     # Save markdown
     with open(md_path, 'w', encoding='utf-8') as f:
-        f.write(markdown)
+        f.write(cleaned_md)
 
     # Download assets into assets/<base_name>/
     assets_dir = out_dir / 'assets' / base_name

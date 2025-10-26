@@ -100,23 +100,81 @@ def html_to_markdown(html: str) -> Tuple[str, List[Dict], List[Dict]]:
     """
     soup = BeautifulSoup(html, 'html.parser')
 
-    # Extract images and compute filenames
+    # Heuristic: prefer the main article content if present to avoid nav/footer noise.
+    main_selectors = [
+        ('article', {}),
+        ('main', {}),
+        (None, {'role': 'article'}),
+    ]
+
+    main_node = None
+    # Try common class-based containers used by Medium and other publishers
+    class_candidates = [r'postArticle', r'meteredContent', r'post-content', r'article', r'section-content', r'entry-content']
+
+    for tag, attrs in main_selectors:
+        if tag:
+            main_node = soup.find(tag)
+        else:
+            main_node = soup.find(attrs=attrs)
+        if main_node:
+            break
+
+    if not main_node:
+        # Try class-based heuristics
+        for cls in class_candidates:
+            main_node = soup.find('div', class_=re.compile(cls, re.I))
+            if main_node:
+                break
+
+    # If we found a candidate, work on a copy of that node only; otherwise keep full soup
+    content_soup = BeautifulSoup(str(main_node), 'html.parser') if main_node else soup
+
+    # Remove common noisy elements: nav/header/footer/aside/forms and signup/signin links
+    noisy_tags = ['nav', 'header', 'footer', 'aside', 'form', 'noscript', 'script', 'iframe']
+    for t in content_soup.find_all(noisy_tags):
+        try:
+            t.decompose()
+        except Exception:
+            pass
+
+    # Remove anchors/buttons likely related to signup/login/search/sitemap
+    noisy_texts = ['sign up', 'sign in', 'search', 'sitemap', 'open in app', 'listen', 'share', 'responses', 'help', 'about', 'privacy', 'terms']
+    for a in content_soup.find_all(['a', 'button', 'span']):
+        txt = (a.get_text() or '').strip().lower()
+        for nt in noisy_texts:
+            if nt in txt:
+                try:
+                    a.decompose()
+                except Exception:
+                    pass
+                break
+
+    # Also remove common class-based widgets (subscribe, cookie, masthead)
+    widget_patterns = [r'subscribe', r'cookie', r'masthead', r'promo', r'global-nav', r'byline', r'author-info']
+    for pat in widget_patterns:
+        for el in content_soup.find_all(class_=re.compile(pat, re.I)):
+            try:
+                el.decompose()
+            except Exception:
+                pass
+
+    # Extract images and compute filenames from the pruned content
     assets: List[Dict] = []
-    for img in soup.find_all('img'):
-        src = img.get('src') or img.get('data-src') or ''
+    for img in content_soup.find_all('img'):
+        src = img.get('src') or img.get('data-src') or img.get('data-original') or ''
         alt = img.get('alt', '')
         if not src:
             continue
         filename = _suggest_filename_from_url(src)
         assets.append({'src': src, 'filename': filename, 'alt': alt})
-        # replace src with filename in the tag so markdownify will use it
+        # replace src with filename so markdownify will reference the local file name
         img['src'] = filename
 
     # Produce markdown with markdownify (preserves code blocks reasonably)
-    markdown = mdify(str(soup), heading_style='ATX')
+    markdown = mdify(str(content_soup), heading_style='ATX')
 
-    # Extract code blocks separately (structured)
-    code_blocks = extract_code_blocks(html)
+    # Extract code blocks separately (structured) from the main content (fallback to full html)
+    code_blocks = extract_code_blocks(str(content_soup) if main_node else html)
 
     return markdown, assets, code_blocks
 
