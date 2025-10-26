@@ -141,6 +141,8 @@ Flags summary:
 - `--skip-session`
 - `--limit` INTEGER
 - `--all` (collect all posts)
+ - `-m, --mode` [ids|metadata|full|technical]  # presets that control enrichment and output
+ - `--index`  # create/update a simple inverted index (JSON) for search
 
 ### Managing sources via CLI
 
@@ -246,6 +248,9 @@ Notes:
 - `src/domain/entities/publication.py` — domain entities
 - `src/infrastructure/config/source_manager.py` — YAML loader
 - `src/infrastructure/adapters/medium_api_adapter.py` — adapter for external API logic
+ - `src/infrastructure/content_extractor.py` — HTML → Markdown conversion, code extraction and heuristics-based classifier
+ - `src/infrastructure/persistence.py` — persisting Markdown, JSON metadata and assets
+ - `src/infrastructure/indexer.py` — simple inverted index writer used by persistence
 
 ## Contributing
 
@@ -256,6 +261,50 @@ The repository already includes `CONTRIBUTING.md` with development workflow, tes
 MIT — see `LICENSE` for details.
 
 ---
+
+## Technical extraction (HTML → Markdown & artifacts)
+
+This project now includes a technical extraction pipeline that converts full post HTML into:
+
+- A Markdown rendering of the post content
+- Extracted assets (images and other linked files), downloaded locally
+- A JSON metadata file per post that includes extracted code blocks and a lightweight "technical" classifier
+- An optional inverted index (`index.json`) for simple token-based search
+
+These artifacts are created when the CLI runs with `--mode full` or `--mode technical` and when the chosen output `--format` includes `md` or when `--index` is passed.
+
+Typical outputs (when using `--format md` and `--index`):
+
+- `outputs/<source_key>/<post_id>.md` — Markdown content
+- `outputs/<source_key>/<post_id>.json` — Metadata (title, authors, date, code_blocks, classifier, original URL)
+- `outputs/<source_key>/assets/<post_id>/<asset_filename>` — downloaded assets referenced from the post
+- `outputs/index.json` — simple inverted index mapping tokens to posts (updated when `--index` is requested)
+
+Example usage:
+
+```bash
+python main.py --source pinterest --mode technical --format md --output outputs/pinterest --index
+```
+
+Notes for maintainers and contributors
+
+- The HTML→Markdown conversion lives in `src/infrastructure/content_extractor.py`. It uses BeautifulSoup and `markdownify` when available and falls back to conservative HTML cleaning heuristics otherwise.
+- Code block extraction and language detection are implemented with heuristics and a Pygments-based fallback; results appear under the `code_blocks` key in the per-post JSON metadata.
+- The lightweight classifier is intentionally heuristic for now (presence/volume of code blocks, presence of technical keywords). A machine-learning classifier can be plugged in later — the extractor and persistence functions accept optional hooks for that.
+- Persistence (writing `.md`, `.json`, downloading assets and updating the index) is implemented in `src/infrastructure/persistence.py` and uses `src/infrastructure/indexer.py` to maintain `index.json`.
+
+Security and safety
+
+- Filenames for assets are sanitized before writing to disk. The persistence layer will not overwrite existing files unless explicitly allowed.
+- The index is intentionally simple and file-based; for larger collections consider migrating to a proper search engine (Elasticsearch, Meilisearch, SQLite FTS, etc.).
+
+Where to start when improving extraction
+
+1. Improve Markdown fidelity: tweak `content_extractor.html_to_markdown()` and add post-processing steps for link rewriting and image `src` normalization.
+2. Harden asset handling: dedupe asset downloads, support remote storage backends, and canonicalize filenames.
+3. Replace the heuristic classifier with an ML model: extractor already records `code_blocks` and features to make training easier.
+
+If you'd like, I can add a `book/` chapter stub that documents the extraction flow and includes exercises for readers — choose "yes" and I'll create it now.
 
 Next steps I can take (pick one):
 - run the test suite and report results
