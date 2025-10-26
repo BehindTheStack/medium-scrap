@@ -21,7 +21,8 @@ class PostDiscoveryService:
         self, 
         config: PublicationConfig, 
         limit: Optional[int] = 25,
-        prefer_auto_discovery: bool = False
+        prefer_auto_discovery: bool = False,
+        progress_callback=None
     ) -> List[Post]:
         """
         Intelligently discover posts using multiple strategies
@@ -36,8 +37,18 @@ class PostDiscoveryService:
         # Strategy 1: Auto-discovery (primary for production)
         if prefer_auto_discovery or not config.has_known_posts:
             discovered_ids = self._post_repository.discover_post_ids(config, limit)
+            if progress_callback:
+                try:
+                    progress_callback({'phase': 'discovered_ids', 'count': len(discovered_ids)})
+                except Exception:
+                    pass
             if discovered_ids:
                 posts = self._post_repository.get_posts_by_ids(discovered_ids, config)
+                if progress_callback:
+                    try:
+                        progress_callback({'phase': 'fetched_posts', 'count': len(posts)})
+                    except Exception:
+                        pass
                 if posts:
                     return posts[:limit] if limit is not None else posts
         
@@ -47,20 +58,7 @@ class PostDiscoveryService:
             posts = self._post_repository.get_posts_by_ids(known_ids, config)
             if posts:
                 return posts
-
-            def enrich_posts_with_html(self, posts: List[Post], config: PublicationConfig) -> List[Post]:
-                """Enrich a list of posts by fetching their full HTML content via the repository."""
-                enriched = []
-                for post in posts:
-                    try:
-                        html = self._post_repository.fetch_post_html(post, config)
-                        if html:
-                            post.content_html = html
-                    except Exception:
-                        # Ignore enrichment failures and continue
-                        pass
-                    enriched.append(post)
-                return enriched
+            
         
         # Strategy 3: Publication feed (last resort)
         try:
@@ -68,6 +66,25 @@ class PostDiscoveryService:
             return posts
         except Exception:
             return []
+
+    def enrich_posts_with_html(self, posts: List[Post], config: PublicationConfig, progress_callback=None) -> List[Post]:
+        """Enrich a list of posts by fetching their full HTML content via the repository."""
+        enriched = []
+        for post in posts:
+            try:
+                html = self._post_repository.fetch_post_html(post, config)
+                if html:
+                    post.content_html = html
+                    if progress_callback:
+                        try:
+                            progress_callback({'phase': 'enriched_post', 'post_id': post.id.value})
+                        except Exception:
+                            pass
+            except Exception:
+                # Ignore enrichment failures and continue
+                pass
+            enriched.append(post)
+        return enriched
 
 
 class PublicationConfigService:

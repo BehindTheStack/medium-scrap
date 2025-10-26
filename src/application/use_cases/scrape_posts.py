@@ -50,7 +50,7 @@ class ScrapePostsUseCase:
         self._publication_config_service = publication_config_service
         self._session_repository = session_repository
     
-    def execute(self, request: ScrapePostsRequest) -> ScrapePostsResponse:
+    def execute(self, request: ScrapePostsRequest, progress_callback=None) -> ScrapePostsResponse:
         """
         Execute the post scraping use case
         Follows Command pattern for request handling
@@ -75,14 +75,15 @@ class ScrapePostsUseCase:
                 posts = self._post_discovery_service.discover_posts_intelligently(
                     config=config,
                     limit=request.limit,
-                    prefer_auto_discovery=request.auto_discover
+                    prefer_auto_discovery=request.auto_discover,
+                    progress_callback=progress_callback
                 )
                 discovery_method = self._determine_discovery_method(config, request.auto_discover)
 
             # If full content is requested, enrich posts with HTML
             if request.mode in ('full', 'technical') and posts:
                 try:
-                    posts = self._post_discovery_service.enrich_posts_with_html(posts, config)
+                    posts = self._post_discovery_service.enrich_posts_with_html(posts, config, progress_callback=progress_callback)
                 except Exception:
                     # Ignore enrichment failures
                     pass

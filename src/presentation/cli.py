@@ -223,7 +223,7 @@ class CLIController:
                     custom_ids=None,
                     auto_discover=source_config.auto_discover,
                     skip_session=defaults.get('skip_session', True),
-                    output_file=output,
+                    output_file=output_file,
                     mode=mode
                 )
             else:
@@ -361,79 +361,53 @@ class CLIController:
     
     def _execute_with_progress(self, request: ScrapePostsRequest, skip_session: bool) -> ScrapePostsResponse:
         """Execute use case with enhanced progress indication"""
-        
-        # Always use enhanced progress display (both session and skip-session modes)
+        # Simplified progress: show an indeterminate spinner and clear, concise stage messages.
+        # Avoid simulated sleeps and fake percentage updates. The spinner remains visible while the
+        # use case runs and we update the description for the main milestones.
         with Progress(
             SpinnerColumn(style="cyan"),
             TextColumn("[bold blue]{task.description}"),
-            BarColumn(complete_style="green", finished_style="green"),
-            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
             TimeElapsedColumn(),
             console=self.console,
             transient=False
         ) as progress:
-            
-            # Create main task
             mode_text = "Auto-Discovery" if skip_session else "Session"
-            main_task = progress.add_task(
-                f"🚀 {mode_text}: {request.publication_name}",
-                total=100
-            )
-            
-            # Create phase task
-            if skip_session:
-                phases = [
-                    ("🔍", "[cyan]Resolving publication...[/cyan]"),
-                    ("🤖", "[yellow]Auto-detecting type...[/yellow]"), 
-                    ("📡", "[blue]Connecting to Medium API...[/blue]"),
-                    ("🔎", "[magenta]Auto-discovering posts...[/magenta]"),
-                    ("📝", "[green]Collecting post details...[/green]"),
-                    ("✨", "[bright_green]Finalizing...[/bright_green]")
-                ]
-            else:
-                phases = [
-                    ("🔍", "[cyan]Resolving publication...[/cyan]"),
-                    ("🤖", "[yellow]Analyzing publication type...[/yellow]"), 
-                    ("🔄", "[blue]Initializing session...[/blue]"),
-                    ("🔎", "[magenta]Discovering posts...[/magenta]"),
-                    ("📝", "[green]Collecting post details...[/green]"),
-                    ("✨", "[bright_green]Processing data...[/bright_green]")
-                ]
-            
-            phase_task = progress.add_task(
-                f"{phases[0][0]} {phases[0][1]}",
-                total=len(phases)
-            )
-            
-            # Simulate pre-execution phases
-            for i, (emoji, phase_text) in enumerate(phases[:3]):
-                progress.update(phase_task, completed=i, description=f"{emoji} {phase_text}")
-                progress.update(main_task, completed=(i * 15))
-                time.sleep(0.4)  # Slightly longer to show each phase
-            
-            # Execute the actual use case
-            progress.update(phase_task, completed=3, description="📡 [bold blue]Executing scraping...[/bold blue]")
-            progress.update(main_task, completed=50)
-            
-            response = self._scrape_posts_use_case.execute(request)
-            
-            # Post-execution phases
-            for i, (emoji, phase_text) in enumerate(phases[4:], 4):
-                progress.update(phase_task, completed=i, description=f"{emoji} {phase_text}")
-                progress.update(main_task, completed=70 + (i-3) * 15)
-                time.sleep(0.3)
-            
-            # Final update
-            progress.update(
-                main_task,
-                completed=100,
-                description=f"[bold green]✅ Collected {response.total_posts_found} posts[/bold green]"
-            )
-            progress.update(phase_task, completed=len(phases), description="[bold green]✨ Complete![/bold green]")
-            
-            # Brief pause to show completion
-            time.sleep(0.8)
-            
+            task_id = progress.add_task(f"🚀 {mode_text}: {request.publication_name}", total=None)
+
+            # Discovery/status task: updated live by progress callback
+            discovery_task = progress.add_task("Discovery", total=None)
+
+            # Indicate start
+            progress.update(task_id, description=f"📡 Executing scraping: {request.publication_name} ...")
+
+            # Live progress callback that updates the discovery task in real-time
+            def _progress_callback(event: dict):
+                try:
+                    phase = event.get('phase')
+                    if phase == 'discovered_ids':
+                        count = event.get('count', 0)
+                        progress.update(discovery_task, description=f"🔎 Discovered IDs: {count}")
+                    elif phase == 'fetched_posts':
+                        count = event.get('count', 0)
+                        progress.update(discovery_task, description=f"📥 Fetched posts: {count}")
+                    elif phase == 'enriched_post':
+                        pid = event.get('post_id')
+                        progress.update(discovery_task, description=f"🧩 Enriched: {pid}")
+                except Exception:
+                    # swallow callback errors to avoid breaking progress UI
+                    pass
+
+            # Execute the actual use case (may take time; spinner will show activity)
+            response = self._scrape_posts_use_case.execute(request, progress_callback=_progress_callback)
+
+            # Update to finalizing
+            progress.update(task_id, description=f"✨ Finalizing — {response.total_posts_found} posts collected")
+
+            # After discovery finishes, show a brief discovery summary (aggregate events)
+            # For a concise summary we can reuse progress_task description; no separate collection here
+            # small pause so users notice the final message before the console continues
+            time.sleep(0.3)
+
         return response
     
     def _handle_successful_response(
@@ -472,23 +446,103 @@ class CLIController:
             output_base = defaults.get('output_dir', 'outputs')
             publication_dir = Path(output_base) / (response.publication_config.name if response.publication_config else 'publication')
             publication_dir.mkdir(parents=True, exist_ok=True)
+            # Use Rich progress with a main task for total posts and a per-post subtask for steps.
+            # Steps per post: convert -> download assets -> persist files -> index update
+            steps_per_post = 4
+            with Progress(
+                SpinnerColumn(style="cyan"),
+                TextColumn("{task.fields[current_post]}", justify="left"),
+                BarColumn(),
+                TextColumn("{task.percentage:>3.0f}%"),
+                TimeElapsedColumn(),
+                console=self.console,
+                transient=False
+            ) as progress:
+                main_task = progress.add_task("Overall", total=len(response.posts), current_post="")
 
-            for post in response.posts:
-                html = getattr(post, 'content_html', None)
-                if not html:
-                    continue
+                posts_done = 0
+                cumulative_time = 0.0
+                persisted_messages = []
 
-                try:
-                    md, assets, code_blocks = content_extractor.html_to_markdown(html)
-                    classification = content_extractor.classify_technical(html, code_blocks)
-                    saved = persist_markdown_and_metadata(
-                        post, md, assets, str(publication_dir), code_blocks=code_blocks, classifier=classification
-                    )
-                    # If user requested index update via CLI flag, update index (persistence already updates index by default)
-                    # (persist_markdown_and_metadata already updates the index; this is kept as a no-op hook)
-                    self.console.print(f"[green]✅ Persisted post {post.id.value} -> {saved['markdown']}[/green]")
-                except Exception as e:
-                    self.console.print(f"[yellow]⚠️ Failed to persist post {post.id.value}: {e}[/yellow]")
+                for post in response.posts:
+                    html = getattr(post, 'content_html', None)
+                    if not html:
+                        # advance the main counter even if there's nothing to do
+                        posts_done += 1
+                        progress.update(main_task, advance=1, current_post=f"Skipping {post.id.value} (no HTML)")
+                        continue
+                    # Start timing for ETA
+                    start_time = time.time()
+
+                    # Use a title-friendly label (truncate to 48 chars) and include slug/reading_time
+                    slug = getattr(post, 'slug', None) or ''
+                    rt = getattr(post, 'reading_time', None)
+                    rt_label = f"{int(rt)}m" if isinstance(rt, (int, float)) else "N/A"
+                    title_head = (post.title[:48] + '...') if post.title and len(post.title) > 48 else (post.title or post.id.value)
+                    slug_part = (slug[:20] + '...') if slug and len(slug) > 20 else slug
+                    title_label = f"{title_head} [{slug_part}] ({rt_label})"
+
+                    subtask = progress.add_task(f"{title_label}", total=steps_per_post, current_post=f"{title_label} — starting")
+
+                    try:
+                        # Step 1: convert HTML -> Markdown
+                        progress.update(subtask, description="convert: HTML -> Markdown", current_post=f"Post {post.id.value} — converting")
+                        md, assets, code_blocks = content_extractor.html_to_markdown(html)
+                        progress.update(subtask, advance=1)
+
+                        # Step 2: classification
+                        progress.update(subtask, description="classify: technical heuristics", current_post=f"Post {post.id.value} — classifying")
+                        classification = content_extractor.classify_technical(html, code_blocks)
+                        progress.update(subtask, advance=1)
+
+                        # Step 3: persist markdown, metadata and assets
+                        progress.update(subtask, description="persist: write files & assets", current_post=f"Post {post.id.value} — persisting")
+                        saved = persist_markdown_and_metadata(
+                            post, md, assets, str(publication_dir), code_blocks=code_blocks, classifier=classification
+                        )
+                        progress.update(subtask, advance=1)
+
+                        # Step 4: finalize/index (persistence already updates index but show step)
+                        progress.update(subtask, description="finalize: index update", current_post=f"Post {post.id.value} — finalizing")
+                        # No-op: persist_markdown_and_metadata already updated index; we keep the step for UX
+                        progress.update(subtask, advance=1)
+
+                        # timing & ETA update using exponential moving average (EMA)
+                        elapsed = time.time() - start_time
+                        posts_done += 1
+                        # Update EMA
+                        if cumulative_time == 0.0:
+                            # initialize EMA to first elapsed
+                            ema = elapsed
+                        else:
+                            # alpha controls responsiveness; 0.3 is a reasonable default
+                            alpha = 0.3
+                            ema = alpha * elapsed + (1 - alpha) * ema
+                        cumulative_time += elapsed
+                        remaining = max(0, len(response.posts) - posts_done)
+                        eta = remaining * ema
+                        eta_str = f"ETA: {int(eta)}s" if eta >= 1 else "ETA: <1s"
+
+                        # Mark post done in overall task and update current_post with ETA
+                        progress.update(main_task, advance=1, current_post=f"{title_label} — done ({eta_str})")
+                        # Remove subtask to keep UI tidy
+                        progress.remove_task(subtask)
+                        persisted_messages.append(f"✅ Persisted post {post.id.value} -> {saved['markdown']}")
+
+                    except Exception as e:
+                        progress.update(main_task, advance=1, current_post=f"Failed {post.id.value}")
+                        # ensure subtask removed
+                        try:
+                            progress.remove_task(subtask)
+                        except Exception:
+                            pass
+                        persisted_messages.append(f"⚠️ Failed to persist post {post.id.value}: {e}")
+
+                # After progress context is closed, print persisted messages in a concise block
+                if persisted_messages:
+                    self.console.print()
+                    for m in persisted_messages:
+                        self.console.print(m)
     
     def _handle_failed_response(self, response: ScrapePostsResponse) -> None:
         """Handle failed scraping response"""
