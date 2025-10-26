@@ -142,6 +142,56 @@ Flags summary:
 - `--limit` INTEGER
 - `--all` (collect all posts)
 
+### Managing sources via CLI
+
+You can add or update sources directly from the CLI using the `add-source` subcommand. This writes to `medium_sources.yaml` and is useful when you want to quickly register a publication without editing the YAML manually.
+
+Example — add Pinterest:
+
+```bash
+python main.py add-source \
+	--key pinterest \
+	--type publication \
+	--name pinterest \
+	--description "Pinterest Engineering" \
+	--auto-discover
+```
+
+Notes:
+- `add-source` persists the change to `medium_sources.yaml` in the repo root.
+- The command is implemented to avoid loading optional network adapters, so it can run even if dependencies like `httpx` are not installed.
+- To see the result, run `python main.py --list-sources`.
+
+Interactive behavior and safety
+
+- If the source key you pass already exists in `medium_sources.yaml`, the CLI will ask for confirmation before overwriting. This prevents accidental data loss when updating an existing source.
+
+	Example (interactive prompt shown):
+
+	```text
+	$ python main.py add-source --key pinterest --type publication --name pinterest --description "Pinterest Engineering"
+	Source 'pinterest' already exists. Overwrite? [y/N]: y
+	✅ Source 'pinterest' added/updated in medium_sources.yaml
+	```
+
+- To skip the interactive prompt and assume confirmation, use `--yes` (or `-y`):
+
+	```bash
+	python main.py add-source --key pinterest --type publication --name pinterest --description "Pinterest Engineering" --yes
+	```
+
+- The CLI subcommand writes a normalized YAML entry (ensures booleans and required keys). It creates the `sources` block if it does not exist.
+
+- After adding/updating a source you can:
+	- run `python main.py --list-sources` to see the configured keys and descriptions; or
+	- open `medium_sources.yaml` to inspect the persisted entry.
+
+Implementation notes (for maintainers)
+
+- The `add-source` subcommand avoids importing network adapters (e.g. `httpx`) when invoked so it can be used on systems where optional runtime dependencies are not installed.
+- The command is implemented in `src/presentation/cli.py` and uses `SourceConfigManager.add_or_update_source` (in `src/infrastructure/config/source_manager.py`) to persist changes.
+
+
 ## How it works (high-level)
 
 1. The CLI bootstraps concrete adapters and repositories (e.g. `MediumApiAdapter`, `InMemoryPublicationRepository`, `MediumSessionRepository`).

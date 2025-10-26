@@ -159,6 +159,27 @@ new-publication:
   custom_domain: true  # if custom domain
 ```
 
+#### Via CLI (convenient)
+
+You can add or update sources using the built-in CLI `add-source` subcommand. This is useful for quickly registering a publication without editing the YAML file by hand.
+
+Example:
+
+```bash
+python main.py add-source \
+    --key pinterest \
+    --type publication \
+    --name pinterest \
+    --description "Pinterest Engineering" \
+    --auto-discover
+```
+
+Notes:
+- The command writes to `medium_sources.yaml` in the repository root and will create the `sources` section if it does not exist.
+- The implementation avoids importing optional network adapters when running this subcommand, so it can run even if HTTP dependencies (like `httpx`) are not installed.
+- After running `add-source`, verify changes with `python main.py --list-sources` or by inspecting `medium_sources.yaml`.
+
+
 #### Programmatically
 For publications with specific logic, add to repository:
 
