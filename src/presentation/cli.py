@@ -398,7 +398,12 @@ class CLIController:
                     pass
 
             # Execute the actual use case (may take time; spinner will show activity)
-            response = self._scrape_posts_use_case.execute(request, progress_callback=_progress_callback)
+            try:
+                response = self._scrape_posts_use_case.execute(request, progress_callback=_progress_callback)
+            except TypeError:
+                # Backwards compatibility: some tests or injected use-cases may not accept
+                # the progress_callback kwarg. Fall back to calling without it.
+                response = self._scrape_posts_use_case.execute(request)
 
             # Update to finalizing
             progress.update(task_id, description=f"✨ Finalizing — {response.total_posts_found} posts collected")
