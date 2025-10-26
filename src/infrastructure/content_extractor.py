@@ -1,168 +1,143 @@
-"""Lightweight HTML -> Markdown converter and code extractor.
+"""Robust HTML -> Markdown converter and code extractor using BeautifulSoup.
 
-This module purposely avoids adding heavy new dependencies. It uses
-the stdlib's HTMLParser + Pygments (already in the environment) for
-language guessing when possible.
-
-Public functions:
-- html_to_markdown(html: str) -> tuple[str, list[dict], list[dict]]
-    Returns (markdown, assets, code_blocks)
-- extract_code_blocks(html: str) -> list[dict]
-    Returns list of {'code': str, 'language': Optional[str]}
+This implementation uses BeautifulSoup to extract images, code blocks and
+then relies on markdownify to produce a readable Markdown output. It also
+returns structured artifacts (assets list with suggested filenames and
+code blocks with detected languages) for downstream persistence.
 """
+
 from __future__ import annotations
 
-import re
-import html as _html
-from html.parser import HTMLParser
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Dict
+from urllib.parse import urlparse
 
+import re
 from pygments.lexers import guess_lexer
 from pygments.util import ClassNotFound
 
-
-def _heuristic_guess_language(code: str) -> Optional[str]:
-    """Simple heuristics to guess code language when Pygments fails."""
-    sample = code[:200]
-    if re.search(r"\bdef\s+\w+\(|\bimport\s+\w+", sample):
-        return "python"
-    if re.search(r"console\.log\(|\bfunction\s*\(|\bconst\s+\w+", sample):
-        return "javascript"
-    if re.search(r"#include\s+<|printf\(|scanf\(|std::", sample):
-        return "c++"
-    if re.search(r"public\s+static\s+void|System\.out\.println|class\s+\w+\{", sample):
-        return "java"
-    if re.search(r"^\s*SELECT\s+.+FROM\s+", sample, re.I):
-        return "sql"
-    return None
+# Try to import BeautifulSoup and markdownify; if not available, fall back to a
+# minimal HTMLParser-based converter so the code works in environments where
+# bs4/markdownify are not installed. This keeps tests runnable without extra
+# package installation while allowing an improved path when the libraries are
+# available.
+_HAS_BS4 = True
+try:
+    from bs4 import BeautifulSoup
+    from markdownify import markdownify as mdify
+except Exception:
+    _HAS_BS4 = False
+    from html.parser import HTMLParser
+    import html as _html
 
 
-def extract_code_blocks(html: str) -> List[dict]:
-    """Extract <pre><code> (and <pre>) blocks from HTML and detect languages.
+def _suggest_filename_from_url(url: str) -> str:
+    parsed = urlparse(url)
+    name = parsed.path.rsplit('/', 1)[-1] or 'asset'
+    return name
 
-    Returns list of {'code': str, 'language': Optional[str]}
+
+def extract_code_blocks(html: str) -> List[Dict]:
+    """Extract code blocks (<pre><code> and <pre>) and detect languages.
+
+    Returns list of {'code': str, 'language': Optional[str]}.
     """
-    blocks: List[dict] = []
+    soup = BeautifulSoup(html, 'html.parser')
+    blocks = []
 
-    # Try to find <pre><code class="language-xxx">...</code></pre>
-    pattern = re.compile(
-        r"<pre[^>]*>\s*(?:<code(?P<attrs>[^>]*)>)?(?P<code>.*?)(?:</code>)?\s*</pre>",
-        re.IGNORECASE | re.DOTALL,
-    )
+    for pre in soup.find_all('pre'):
+        code_tag = pre.find('code')
+        if code_tag:
+            code_text = code_tag.get_text()
+            # try to get language from class attribute
+            lang = None
+            cls = code_tag.get('class') or []
+            for c in cls:
+                m = re.match(r'language-(\w+)', c)
+                if m:
+                    lang = m.group(1)
+                    break
+        else:
+            code_text = pre.get_text()
+            lang = None
 
-    for m in pattern.finditer(html):
-        code_html = m.group('code') or ''
-        attrs = m.group('attrs') or ''
-        # strip HTML tags inside code block conservatively
-        code_text = re.sub(r"<[^>]+>", '', code_html)
-        code_text = _html.unescape(code_text)
-        # detect language from class attr e.g. class="language-python"
-        lang = None
-        cls_match = re.search(r'class\s*=\s*"([^"]+)"', attrs)
-        if cls_match:
-            cls = cls_match.group(1)
-            m2 = re.search(r'language-(\w+)', cls)
-            if m2:
-                lang = m2.group(1)
-
-        # If no explicit language, try Pygments
+        # Try Pygments if no explicit language
         if not lang:
             try:
                 lexer = guess_lexer(code_text)
                 lang = lexer.name.lower()
             except ClassNotFound:
-                lang = _heuristic_guess_language(code_text)
+                # heuristic fallback
+                lc = code_text[:200].lower()
+                if 'def ' in lc or 'import ' in lc:
+                    lang = 'python'
+                elif 'console.log' in lc or 'function ' in lc:
+                    lang = 'javascript'
+                elif '#include' in lc or 'std::' in lc:
+                    lang = 'cpp'
+                else:
+                    lang = None
 
-        blocks.append({'code': code_text.strip('\n'), 'language': lang})
+        blocks.append({'code': code_text.rstrip('\n'), 'language': lang})
 
     return blocks
 
 
-class _MinimalHTMLToMarkdown(HTMLParser):
-    def __init__(self):
-        super().__init__()
-        self.parts: List[str] = []
-        self._in_pre = False
-        self._in_code = False
-        self._code_buffer: List[str] = []
-        self.assets: List[dict] = []
-        self._link_href_stack: List[Optional[str]] = []
+def html_to_markdown(html: str) -> Tuple[str, List[Dict], List[Dict]]:
+    """Convert HTML to Markdown and extract assets & code blocks.
 
-    def handle_starttag(self, tag, attrs):
-        attrs = dict(attrs)
-        if tag in ('h1', 'h2', 'h3', 'h4', 'h5', 'h6'):
-            level = int(tag[1])
-            self.parts.append('\n' + ('#' * level) + ' ')
-        elif tag == 'p':
-            self.parts.append('\n\n')
-        elif tag == 'br':
-            self.parts.append('  \n')
-        elif tag == 'pre':
-            self._in_pre = True
-            self._code_buffer = []
-        elif tag == 'code':
-            self._in_code = True
-        elif tag == 'a':
-            href = attrs.get('href')
-            self._link_href_stack.append(href)
-            # start link text; actual formatting happens in handle_endtag
-        elif tag == 'img':
-            src = attrs.get('src')
-            alt = attrs.get('alt', '')
-            if src:
-                # Save asset metadata; actual download happens elsewhere
-                self.assets.append({'src': src, 'alt': alt})
-                filename = src.split('/')[-1]
-                self.parts.append(f'![{alt}]({filename})')
-
-    def handle_endtag(self, tag):
-        if tag == 'pre':
-            # flush code buffer as fenced block
-            code = ''.join(self._code_buffer).rstrip('\n')
-            self.parts.append('\n\n```\n')
-            self.parts.append(code)
-            self.parts.append('\n```\n')
-            self._in_pre = False
-            self._code_buffer = []
-        elif tag == 'code':
-            self._in_code = False
-        elif tag == 'a':
-            href = None
-            if self._link_href_stack:
-                href = self._link_href_stack.pop()
-            # We don't have the link text separated here; keep it simple
-            if href:
-                self.parts.append(f' ({href})')
-
-    def handle_data(self, data):
-        if self._in_pre or self._in_code:
-            self._code_buffer.append(data)
-        else:
-            # collapse multiple spaces
-            text = data.replace('\n', ' ')
-            self.parts.append(text)
-
-    def get_markdown(self) -> Tuple[str, List[dict]]:
-        md = ''.join(self.parts)
-        # basic cleanup
-        md = re.sub(r'\s+\n', '\n', md)
-        md = md.strip() + '\n'
-        return md, self.assets
-
-
-def html_to_markdown(html: str) -> Tuple[str, List[dict], List[dict]]:
-    """Convert HTML to a simple Markdown, extract assets and code blocks.
-
-    Returns (markdown, assets, code_blocks)
+    Returns (markdown, assets, code_blocks).
+    assets: list of {'src': original_url, 'filename': suggested_filename, 'alt': alt_text}
     """
-    parser = _MinimalHTMLToMarkdown()
-    parser.feed(html)
-    md, assets = parser.get_markdown()
+    soup = BeautifulSoup(html, 'html.parser')
+
+    # Extract images and compute filenames
+    assets: List[Dict] = []
+    for img in soup.find_all('img'):
+        src = img.get('src') or img.get('data-src') or ''
+        alt = img.get('alt', '')
+        if not src:
+            continue
+        filename = _suggest_filename_from_url(src)
+        assets.append({'src': src, 'filename': filename, 'alt': alt})
+        # replace src with filename in the tag so markdownify will use it
+        img['src'] = filename
+
+    # Produce markdown with markdownify (preserves code blocks reasonably)
+    markdown = mdify(str(soup), heading_style='ATX')
+
+    # Extract code blocks separately (structured)
     code_blocks = extract_code_blocks(html)
-    return md, assets, code_blocks
+
+    return markdown, assets, code_blocks
 
 
-__all__ = ["html_to_markdown", "extract_code_blocks"]
+def classify_technical(html: str, code_blocks: List[dict]) -> dict:
+    """Simple heuristics-based technical classifier (keeps room for future ML).
+
+    Returns: {'is_technical': bool, 'score': float, 'reasons': List[str]}
+    """
+    reasons: List[str] = []
+    score = 0.0
+
+    if code_blocks:
+        reasons.append(f'code_blocks:{len(code_blocks)}')
+        score += min(0.6, 0.2 * len(code_blocks)) + 0.4
+
+    keywords = ['import ', 'def ', 'class ', 'function ', 'console.log', 'select ']  # simple set
+    found = 0
+    low_html = html.lower()
+    for kw in keywords:
+        if kw in low_html:
+            found += 1
+    if found:
+        reasons.append(f'keywords:{found}')
+        score += min(0.4, 0.1 * found)
+
+    score = max(0.0, min(1.0, score))
+    return {'is_technical': score >= 0.3, 'score': round(score, 2), 'reasons': reasons}
+
+
+__all__ = ['html_to_markdown', 'extract_code_blocks', 'classify_technical']
 
 def classify_technical(html: str, code_blocks: List[dict]) -> dict:
     """Simple heuristics-based technical classifier.

@@ -484,6 +484,8 @@ class CLIController:
                     saved = persist_markdown_and_metadata(
                         post, md, assets, str(publication_dir), code_blocks=code_blocks, classifier=classification
                     )
+                    # If user requested index update via CLI flag, update index (persistence already updates index by default)
+                    # (persist_markdown_and_metadata already updates the index; this is kept as a no-op hook)
                     self.console.print(f"[green]✅ Persisted post {post.id.value} -> {saved['markdown']}[/green]")
                 except Exception as e:
                     self.console.print(f"[yellow]⚠️ Failed to persist post {post.id.value}: {e}[/yellow]")
@@ -523,8 +525,9 @@ class CLIController:
 @click.option('--all', 'all_posts', is_flag=True, help='Collect ALL posts from publication (no limit)')
 @click.option('--auto-discover', is_flag=True, 
               help='Force auto-discovery mode (production ready)')
+@click.option('--index', is_flag=True, help='Update local search index for persisted posts')
 @click.pass_context
-def cli(ctx, publication, source, bulk, list_sources, output, format_type, mode, custom_ids, skip_session, limit, all_posts, auto_discover):
+def cli(ctx, publication, source, bulk, list_sources, output, format_type, mode, custom_ids, skip_session, limit, all_posts, auto_discover, index):
     """
     Universal Medium Scraper - Enterprise Edition
     

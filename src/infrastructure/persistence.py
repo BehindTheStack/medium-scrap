@@ -8,6 +8,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from .http_transport import HttpxTransport
+from .indexer import update_index
 
 
 def _safe_filename(url: str) -> str:
@@ -63,6 +64,21 @@ def persist_markdown_and_metadata(post, markdown: str, assets: List[Dict], outpu
     saved_assets = []
     if assets:
         saved_assets = download_assets(assets, str(assets_dir))
+
+    # Update inverted index (best-effort)
+    try:
+        post_meta = {
+            'id': post_key,
+            'title': getattr(post, 'title', None),
+            'markdown': str(md_path),
+            'metadata': str(json_path),
+            'assets': saved_assets,
+            'classifier': classifier or {}
+        }
+        update_index(os.path.join(output_dir, 'index.json'), post_meta)
+    except Exception:
+        # Don't fail persistence on index problems
+        pass
 
     # Save metadata
     meta = {
