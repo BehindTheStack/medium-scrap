@@ -245,6 +245,9 @@ netflix_*.json
 pinterest_*.json
 medium_posts_*.json
 
+# Ignore generated outputs from scrapes
+outputs/
+
 # Logs and temp files
 *.log
 *.tmp

@@ -25,12 +25,30 @@ class PostDiscoveryService:
         progress_callback=None
     ) -> List[Post]:
         """
-        Intelligently discover posts using multiple strategies
-        
-        Strategy precedence:
-        1. Auto-discovery (if preferred or no known IDs)
-        2. Known IDs (fallback)
-        3. Publication feed (last resort)
+        Intelligently discover posts using multiple strategies.
+
+        This method implements a small strategy chain:
+        1. Auto-discovery (preferred when enabled or when no known IDs are present).
+        2. Known IDs from configuration (fallback when available).
+        3. Publication feed scraping (last resort).
+
+        Parameters
+        ----------
+        config: PublicationConfig
+            Publication configuration used to discover or fetch posts.
+        limit: Optional[int]
+            Maximum number of posts to return. None means no limit.
+        prefer_auto_discovery: bool
+            When True, prefer auto-discovery even if known IDs are present.
+        progress_callback: Optional[callable]
+            Optional callable that receives lightweight events during discovery
+            and fetching. Used by the CLI to update live progress. Events are
+            best-effort and should not raise exceptions.
+
+        Returns
+        -------
+        List[Post]
+            List of discovered or fetched Post entities.
         """
         posts = []
         
@@ -68,7 +86,23 @@ class PostDiscoveryService:
             return []
 
     def enrich_posts_with_html(self, posts: List[Post], config: PublicationConfig, progress_callback=None) -> List[Post]:
-        """Enrich a list of posts by fetching their full HTML content via the repository."""
+        """Enrich a list of posts by fetching their full HTML content via the repository.
+
+        Parameters
+        ----------
+        posts: List[Post]
+            Posts to enrich (mutated in-place with .content_html when fetched).
+        config: PublicationConfig
+            Publication configuration used to fetch HTML content.
+        progress_callback: Optional[callable]
+            Optional callable invoked with {'phase': 'enriched_post', 'post_id': <id>} for
+            each post successfully enriched. The callback should be non-blocking.
+
+        Returns
+        -------
+        List[Post]
+            The list of posts with content_html populated when available.
+        """
         enriched = []
         for post in posts:
             try:

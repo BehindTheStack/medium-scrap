@@ -18,7 +18,20 @@ def _safe_filename(url: str) -> str:
 
 
 def download_assets(assets: List[Dict], dest_dir: str) -> List[str]:
-    """Download assets (images) to dest_dir. Returns list of local file paths."""
+    """Download assets (images) to dest_dir.
+
+    Parameters
+    ----------
+    assets: List[Dict]
+        List of asset descriptors. Each item should contain at least a 'src' key.
+    dest_dir: str
+        Destination directory where assets will be saved.
+
+    Returns
+    -------
+    List[str]
+        List of saved file paths (relative to the filesystem).
+    """
     os.makedirs(dest_dir, exist_ok=True)
     transport = HttpxTransport()
     saved = []
@@ -42,8 +55,30 @@ def download_assets(assets: List[Dict], dest_dir: str) -> List[str]:
 def persist_markdown_and_metadata(post, markdown: str, assets: List[Dict], output_dir: str, *, code_blocks: Optional[List[Dict]] = None, classifier: Optional[Dict] = None) -> Dict[str, str]:
     """Persist markdown and JSON metadata for a post.
 
-    post: domain Post entity (expects .id.value and .title)
-    Returns dict with paths for markdown, json and assets_dir
+    This helper writes three primary artifacts for a post:
+    - a Markdown file with the rendered content
+    - a JSON metadata file containing title, slug, author, code_blocks and classifier
+    - a local assets directory with downloaded images/files referenced by the post
+
+    Parameters
+    ----------
+    post: object
+        Domain Post entity (must expose .id.value and optional .title, .slug, .author).
+    markdown: str
+        The Markdown body to write.
+    assets: List[Dict]
+        Structured list of assets as produced by the extractor (each item should include 'src' and 'filename').
+    output_dir: str
+        Directory under which the artifacts will be stored.
+    code_blocks: Optional[List[Dict]]
+        Extracted code blocks to include in metadata.
+    classifier: Optional[Dict]
+        Classifier output (e.g., {'is_technical': True, 'score': 0.9, 'reasons': [...]})
+
+    Returns
+    -------
+    Dict[str, str]
+        Paths for written artifacts: {'markdown': ..., 'metadata': ..., 'assets_dir': ...}
     """
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)

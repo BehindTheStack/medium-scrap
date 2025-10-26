@@ -54,6 +54,15 @@ class ScrapePostsUseCase:
         """
         Execute the post scraping use case
         Follows Command pattern for request handling
+
+        Parameters
+        ----------
+        request: ScrapePostsRequest
+            DTO describing which publication and options to scrape.
+        progress_callback: Optional[callable]
+            Optional callable that receives simple dict events during discovery
+            and enrichment phases. The CLI may pass a callback to update
+            a progress UI. Events are best-effort and must not raise.
         """
         try:
             # 1. Resolve publication configuration

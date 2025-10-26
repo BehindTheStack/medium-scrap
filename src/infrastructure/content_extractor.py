@@ -39,7 +39,14 @@ def _suggest_filename_from_url(url: str) -> str:
 def extract_code_blocks(html: str) -> List[Dict]:
     """Extract code blocks (<pre><code> and <pre>) and detect languages.
 
-    Returns list of {'code': str, 'language': Optional[str]}.
+    The function returns a list of dictionaries with keys:
+    - 'code': the raw code text
+    - 'language': a best-effort language name (or None)
+
+    Detection strategy:
+    1. Look for explicit language classes on the <code> tag (e.g. 'language-python').
+    2. Try Pygments.guess_lexer as a fallback.
+    3. Use small heuristics for a few common languages.
     """
     soup = BeautifulSoup(html, 'html.parser')
     blocks = []
@@ -85,8 +92,11 @@ def extract_code_blocks(html: str) -> List[Dict]:
 def html_to_markdown(html: str) -> Tuple[str, List[Dict], List[Dict]]:
     """Convert HTML to Markdown and extract assets & code blocks.
 
-    Returns (markdown, assets, code_blocks).
-    assets: list of {'src': original_url, 'filename': suggested_filename, 'alt': alt_text}
+    Returns a tuple: (markdown, assets, code_blocks).
+
+    - markdown: string with the converted Markdown content.
+    - assets: list of dicts with keys 'src', 'filename' and 'alt' suitable for persistence.
+    - code_blocks: list of {'code': ..., 'language': ...} extracted from the original HTML.
     """
     soup = BeautifulSoup(html, 'html.parser')
 
