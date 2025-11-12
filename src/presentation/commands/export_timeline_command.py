@@ -74,12 +74,18 @@ MARKDOWN_COMBINED_PREVIEW_LIMIT = 20
     default='both',
     help='Output format'
 )
+@click.option(
+    '--technical-only',
+    is_flag=True,
+    help='Export only technical posts (is_technical=True)'
+)
 def export_timeline_command(
     source: Optional[str],
     all_sources: bool,
     combined: bool,
     output: Optional[str],
-    format: str
+    format: str,
+    technical_only: bool
 ) -> None:
     """Export Timeline with Complete ML Discovery Data.
     
@@ -99,6 +105,7 @@ def export_timeline_command(
         combined: Combine all sources in one file (requires all_sources)
         output: Custom output directory path
         format: Output format ('json' or 'both')
+        technical_only: Export only technical posts
         
     Returns:
         None
@@ -116,6 +123,9 @@ def export_timeline_command(
         # Export ALL sources COMBINED in one file
         uv run python main.py export-timeline --all --combined
         
+        # Export only technical posts
+        uv run python main.py export-timeline --all --combined --technical-only
+        
         # Custom output directory
         uv run python main.py export-timeline --all --output ./timelines
         
@@ -128,7 +138,7 @@ def export_timeline_command(
     output_dir = Path(output) if output else Path(DEFAULT_OUTPUT_DIR)
     output_dir.mkdir(exist_ok=True, parents=True)
     
-    _print_export_header(console)
+    _print_export_header(console, technical_only)
     
     # Check ML classification status
     ml_status = _check_ml_status(db, console)
@@ -154,16 +164,17 @@ def export_timeline_command(
     
     # Export based on mode
     if all_sources and combined:
-        _export_combined_mode(db, sources_to_export, output_dir, format, console)
+        _export_combined_mode(db, sources_to_export, output_dir, format, console, technical_only)
     else:
-        _export_separate_mode(db, sources_to_export, output_dir, format, console)
+        _export_separate_mode(db, sources_to_export, output_dir, format, console, technical_only)
 
 
-def _print_export_header(console: Console) -> None:
+def _print_export_header(console: Console, technical_only: bool = False) -> None:
     """Print export command header.
     
     Args:
         console: Rich console for output
+        technical_only: Whether exporting only technical posts
         
     Returns:
         None
@@ -172,9 +183,9 @@ def _print_export_header(console: Console) -> None:
     console.print(
         "[bold cyan]📊 Timeline Export - ML Discovery Edition[/bold cyan]"
     )
+    mode = "Technical Posts Only" if technical_only else "All Posts"
     console.print(
-        "[dim]Format: Complete ML data "
-        "(tech_stack, patterns, solutions, problem, approach)[/dim]"
+        f"[dim]Format: Complete ML data ({mode})[/dim]"
     )
     console.print()
 
@@ -306,7 +317,8 @@ def _export_combined_mode(
     sources: List[str],
     output_dir: Path,
     format: str,
-    console: Console
+    console: Console,
+    technical_only: bool = False
 ) -> None:
     """Export all sources combined in one file.
     
@@ -316,6 +328,7 @@ def _export_combined_mode(
         output_dir: Output directory path
         format: Output format ('json' or 'both')
         console: Rich console for output
+        technical_only: Export only technical posts
         
     Returns:
         None
@@ -324,7 +337,7 @@ def _export_combined_mode(
         f"[cyan]Combining {len(sources)} sources into one file...[/cyan]"
     )
     
-    timeline = _build_combined_timeline(db, sources, console)
+    timeline = _build_combined_timeline(db, sources, console, technical_only)
     
     if not timeline:
         return
@@ -356,7 +369,8 @@ def _export_separate_mode(
     sources: List[str],
     output_dir: Path,
     format: str,
-    console: Console
+    console: Console,
+    technical_only: bool = False
 ) -> None:
     """Export sources as separate files.
     
@@ -366,6 +380,7 @@ def _export_separate_mode(
         output_dir: Output directory path
         format: Output format ('json' or 'both')
         console: Rich console for output
+        technical_only: Export only technical posts
         
     Returns:
         None
@@ -384,7 +399,7 @@ def _export_separate_mode(
         )
         
         for src in sources:
-            _export_source_timeline(db, src, output_dir, format, console)
+            _export_source_timeline(db, src, output_dir, format, console, technical_only)
             exported_count += 1
             progress.update(task, advance=1)
     
@@ -399,7 +414,8 @@ def _export_separate_mode(
 def _build_combined_timeline(
     db: PipelineDB,
     sources: List[str],
-    console: Console
+    console: Console,
+    technical_only: bool = False
 ) -> Optional[Dict[str, Any]]:
     """Build combined timeline from multiple sources.
     
@@ -407,6 +423,7 @@ def _build_combined_timeline(
         db: Database instance
         sources: List of source names
         console: Rich console for output
+        technical_only: Export only technical posts
         
     Returns:
         Timeline dictionary or None if no data
@@ -426,7 +443,7 @@ def _build_combined_timeline(
         )
         
         for src in sources:
-            posts = _get_ml_classified_posts(db, src)
+            posts = _get_ml_classified_posts(db, src, technical_only)
             
             if not posts:
                 progress.update(task, advance=1)
@@ -464,26 +481,35 @@ def _build_combined_timeline(
 
 def _get_ml_classified_posts(
     db: PipelineDB,
-    source: str
+    source: str,
+    technical_only: bool = False
 ) -> List[Dict[str, Any]]:
     """Get posts with ML classification from database.
     
     Args:
         db: Database instance
         source: Source name
+        technical_only: Get only technical posts
         
     Returns:
         List of post dictionaries
     """
     with db._get_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("""
+        
+        query = """
             SELECT * FROM posts 
             WHERE source = ? 
             AND content_markdown IS NOT NULL
             AND ml_classified = 1
-            ORDER BY published_at DESC
-        """, (source,))
+        """
+        
+        if technical_only:
+            query += " AND is_technical = 1"
+        
+        query += " ORDER BY published_at DESC"
+        
+        cursor.execute(query, (source,))
         return [dict(row) for row in cursor.fetchall()]
 
 
@@ -644,7 +670,8 @@ def _export_source_timeline(
     source: str,
     output_dir: Path,
     format: str,
-    console: Console
+    console: Console,
+    technical_only: bool = False
 ) -> None:
     """Export timeline for a single source.
     
@@ -654,11 +681,12 @@ def _export_source_timeline(
         output_dir: Output directory path
         format: Output format ('json' or 'both')
         console: Rich console for output
+        technical_only: Export only technical posts
         
     Returns:
         None
     """
-    posts = _get_ml_classified_posts(db, source)
+    posts = _get_ml_classified_posts(db, source, technical_only)
     
     if not posts:
         console.print(
