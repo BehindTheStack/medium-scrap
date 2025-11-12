@@ -10,7 +10,7 @@ from typing import List, Optional
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
-from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeElapsedColumn
+from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeElapsedColumn, TaskProgressColumn, TimeRemainingColumn
 import time
 
 from ..application.use_cases.scrape_posts import (
@@ -2080,21 +2080,22 @@ def full_command(source, limit):
             from ..application.use_cases.scrape_posts import ScrapePostsUseCase, ScrapePostsRequest
             
             # Phase 1: Always try to collect new posts
-            console.print("[blue]📥 Collecting...[/blue]")
-            post_repo = MediumApiAdapter()
-            pub_repo = InMemoryPublicationRepository()
-            sess_repo = MediumSessionRepository()
-            
-            svc = PostDiscoveryService(post_repo)
-            cfg_svc = PublicationConfigService(pub_repo)
-            use_case = ScrapePostsUseCase(svc, cfg_svc, sess_repo)
-            
-            req = ScrapePostsRequest(publication_name=src, limit=limit, auto_discover=True, skip_session=True, mode='metadata')
-            resp = use_case.execute(req)
+            with console.status("[blue]📥 Collecting...[/blue]", spinner="dots"):
+                post_repo = MediumApiAdapter()
+                pub_repo = InMemoryPublicationRepository()
+                sess_repo = MediumSessionRepository()
+                
+                svc = PostDiscoveryService(post_repo)
+                cfg_svc = PublicationConfigService(pub_repo)
+                use_case = ScrapePostsUseCase(svc, cfg_svc, sess_repo)
+                
+                req = ScrapePostsRequest(publication_name=src, limit=limit, auto_discover=True, skip_session=True, mode='metadata')
+                resp = use_case.execute(req)
             
             posts_collected = 0
             if resp.success and len(resp.posts) > 0:
                 # Phase 2: Save to DB (add_or_update handles duplicates)
+                console.print(f"[dim]💾 Saving {len(resp.posts)} posts to database...[/dim]")
                 new_posts = 0
                 updated_posts = 0
                 
@@ -2102,6 +2103,14 @@ def full_command(source, limit):
                     try:
                         # Check if post already exists
                         existing = db.post_exists(post.id.value)
+                        
+                        # If exists and already enriched, skip update (preserve enrichment)
+                        if existing:
+                            existing_post = next((p for p in db.get_posts_by_source(src) if p['id'] == post.id.value), None)
+                            if existing_post and existing_post.get('content_markdown'):
+                                # Already enriched, skip to preserve content
+                                updated_posts += 1
+                                continue
                         
                         db.add_or_update_post({
                             'id': post.id.value,
@@ -2128,7 +2137,6 @@ def full_command(source, limit):
                 console.print(f"[green]✅ {new_posts} new, {updated_posts} updated ({len(resp.posts)} total)[/green]")
                 posts_collected = len(resp.posts)
                 stats['collected'] += new_posts
-                console.print(f"[green]💾 Saved to DB[/green]")
             else:
                 # Collection failed, check if we have existing posts
                 existing_posts = db.get_posts_by_source(src)
@@ -2147,7 +2155,7 @@ def full_command(source, limit):
                 ["uv", "run", "python", "main.py", "etl", "--source", src, "--limit", str(limit)] if limit else ["uv", "run", "python", "main.py", "etl", "--source", src],
                 capture_output=False,  # Show live output with Rich progress bars
                 text=True,
-                timeout=600
+                timeout=1800  # 30 minutes timeout
             )
             
             if result.returncode == 0:
@@ -2268,84 +2276,79 @@ def etl_command(source, limit, slow_mode):
         failed = 0
         failure_reasons = {}  # Track failure reasons
         
-        with Progress(
-            SpinnerColumn(style="cyan"),
-            TextColumn("[bold]{task.description}"),
-            BarColumn(),
-            TextColumn("{task.percentage:>3.0f}%"),
-            console=console,
-            transient=False
-        ) as progress:
-            task = progress.add_task("Enriching...", total=len(posts_to_enrich))
+        # Use simpler progress to avoid flickering
+        console.print()
+        import time
+        for i, post_data in enumerate(posts_to_enrich, 1):
+            # Show progress every 10 posts or at the end
+            if i % 10 == 1 or i == len(posts_to_enrich):
+                console.print(f"[cyan]Progress: {i}/{len(posts_to_enrich)} posts ({i*100//len(posts_to_enrich)}%)[/cyan]", end='\r')
             
-            for post_data in posts_to_enrich:
-                post = None
+            # Add delay BEFORE processing (skip first post)
+            if i > 1:
+                time.sleep(3)  # 3 seconds between posts
+            
+            post = None
+            try:
+                # Get config
                 try:
-                    # Add delay to avoid rate limiting (Medium is aggressive)
-                    import time
-                    time.sleep(3)  # 3 seconds between posts
-                    
-                    # Get config
-                    try:
-                        sources = config_manager.load_sources()
-                        source_config = sources.get('sources', {}).get(source)
-                        if source_config:
-                            from ..infrastructure.external.repositories import InMemoryPublicationRepository
-                            repo = InMemoryPublicationRepository()
-                            config = repo.create_generic_config(source_config.get('publication', post_data['publication']))
-                        else:
-                            raise ValueError("Config not found")
-                    except:
+                    sources = config_manager.load_sources()
+                    source_config = sources.get('sources', {}).get(source)
+                    if source_config:
                         from ..infrastructure.external.repositories import InMemoryPublicationRepository
                         repo = InMemoryPublicationRepository()
-                        config = repo.create_generic_config(post_data['publication'])
-                    
-                    author_name = post_data.get('author') or 'Unknown'
-                    post = Post(
-                        id=PostId(post_data['id']),
-                        title=post_data['title'] or 'Untitled',
-                        slug=post_data.get('url', '').split('/')[-1] if post_data.get('url') else post_data['id'],
-                        author=Author(id='unknown', name=author_name, username=author_name.lower().replace(' ', '_')),
-                        published_at=datetime.now(timezone.utc),
-                        reading_time=post_data.get('reading_time', 0)
-                    )
-                    
-                    html = adapter.fetch_post_html(post, config)
-                    if not html:
-                        failed += 1
-                        reason = "No HTML returned from API"
-                        failure_reasons[reason] = failure_reasons.get(reason, 0) + 1
-                        progress.update(task, advance=1)
-                        continue
-                    
-                    md, assets, code_blocks = content_extractor.html_to_markdown(html)
-                    classification = content_extractor.classify_technical(html, code_blocks)
-                    text_only = re.sub(r'[#*`\[\]()]+', ' ', md)
-                    text_only = re.sub(r'\s+', ' ', text_only).strip()
-                    
-                    post_data['content_html'] = html
-                    post_data['content_markdown'] = md
-                    post_data['content_text'] = text_only[:5000]
-                    post_data['has_markdown'] = True
-                    post_data['is_technical'] = classification.get('is_technical')
-                    post_data['technical_score'] = classification.get('score')
-                    post_data['code_blocks'] = len(code_blocks)
-                    post_data['metadata'] = {
-                        'classifier': classification,
-                        'code_blocks': code_blocks,
-                        'assets': assets
-                    }
-                    
-                    db.add_or_update_post(post_data)
-                    enriched += 1
-                    progress.update(task, advance=1)
-                    
-                except Exception as e:
+                        config = repo.create_generic_config(source_config.get('publication', post_data['publication']))
+                    else:
+                        raise ValueError("Config not found")
+                except:
+                    from ..infrastructure.external.repositories import InMemoryPublicationRepository
+                    repo = InMemoryPublicationRepository()
+                    config = repo.create_generic_config(post_data['publication'])
+                
+                author_name = post_data.get('author') or 'Unknown'
+                post = Post(
+                    id=PostId(post_data['id']),
+                    title=post_data['title'] or 'Untitled',
+                    slug=post_data.get('url', '').split('/')[-1] if post_data.get('url') else post_data['id'],
+                    author=Author(id='unknown', name=author_name, username=author_name.lower().replace(' ', '_')),
+                    published_at=datetime.now(timezone.utc),
+                    reading_time=post_data.get('reading_time', 0)
+                )
+                
+                html = adapter.fetch_post_html(post, config)
+                if not html:
                     failed += 1
-                    reason = str(e)[:50]  # Truncate long errors
+                    reason = "No HTML returned from API"
                     failure_reasons[reason] = failure_reasons.get(reason, 0) + 1
-                    progress.update(task, advance=1)
+                    continue
+                
+                md, assets, code_blocks = content_extractor.html_to_markdown(html)
+                classification = content_extractor.classify_technical(html, code_blocks)
+                text_only = re.sub(r'[#*`\[\]()]+', ' ', md)
+                text_only = re.sub(r'\s+', ' ', text_only).strip()
+                
+                post_data['content_html'] = html
+                post_data['content_markdown'] = md
+                post_data['content_text'] = text_only[:5000]
+                post_data['has_markdown'] = True
+                post_data['is_technical'] = classification.get('is_technical')
+                post_data['technical_score'] = classification.get('score')
+                post_data['code_blocks'] = len(code_blocks)
+                post_data['metadata'] = {
+                    'classifier': classification,
+                    'code_blocks': code_blocks,
+                    'assets': assets
+                }
+                
+                db.add_or_update_post(post_data)
+                enriched += 1
+                
+            except Exception as e:
+                failed += 1
+                reason = str(e)[:50]  # Truncate long errors
+                failure_reasons[reason] = failure_reasons.get(reason, 0) + 1
         
+        console.print()  # New line after progress
         console.print(f"[green]✅ Enriched: {enriched}[/green]", end="")
         if failed > 0:
             console.print(f" [yellow]| Failed: {failed}[/yellow]")
@@ -2358,28 +2361,10 @@ def etl_command(source, limit, slow_mode):
     
     console.print()
     
-    # Step 2: Timeline
-    console.print("[bold blue]Step 2/2: Generating Timeline...[/bold blue]")
-    
-    LAYERS = {
-        "Infrastructure": ["aws", "ec2", "kubernetes", "k8s", "infrastructure", "cloud", "container", "docker", "deployment", "cicd"],
-        "Backend APIs": ["api", "graphql", "rest", "backend", "microservice", "grpc", "service mesh"],
-        "Data Infrastructure": ["data", "database", "kafka", "spark", "etl", "warehouse", "cassandra", "elasticsearch", "flink"],
-        "Frontend & UI": ["ui", "frontend", "react", "vue", "web", "ux", "javascript", "typescript", "mobile"],
-        "ML & AI": ["machine learning", "ml", "ai", "model", "training", "recommendation", "neural network", "tensorflow"],
-        "Observability": ["observability", "monitoring", "tracing", "logging", "metrics", "prometheus", "grafana"],
-        "Security": ["security", "authentication", "authorization", "encryption", "oauth"],
-        "Platform Engineering": ["platform", "developer experience", "internal tools"],
-    }
-    
-    def classify(text):
-        text_lower = text.lower()
-        matches = {}
-        for layer, keywords in LAYERS.items():
-            score = sum(1 for kw in keywords if kw in text_lower)
-            if score > 0:
-                matches[layer] = score
-        return [layer for layer, _ in sorted(matches.items(), key=lambda x: x[1], reverse=True)] or ["Other"]
+    # Step 2: ML-Based Discovery & Timeline
+    console.print("[bold blue]Step 2/2: ML Discovery & Timeline Generation...[/bold blue]")
+    console.print("[dim]Using: Clustering + NER + Q&A (NO hardcoded keywords!)[/dim]")
+    console.print()
     
     posts = db.get_posts_with_content(source=source)
     
@@ -2387,9 +2372,10 @@ def etl_command(source, limit, slow_mode):
         console.print("[red]❌ No posts with content![/red]")
         return
     
-    console.print(f"[yellow]Processing {len(posts)} posts...[/yellow]")
+    console.print(f"[yellow]Processing {len(posts)} posts with ML...[/yellow]")
     
-    entries = []
+    # Prepare data for ML discovery
+    entries_for_ml = []
     for post in posts:
         md = post.get('content_markdown', '')
         if not md:
@@ -2403,7 +2389,6 @@ def etl_command(source, limit, slow_mode):
                 pass
         
         tags = json.loads(post.get('tags', '[]')) if isinstance(post.get('tags'), str) else post.get('tags', [])
-        layers = classify(f"{post.get('title', '')} {md[:4000]} {' '.join(tags)}")
         
         lines = md.split('\n')
         snippet = ''
@@ -2413,11 +2398,11 @@ def etl_command(source, limit, slow_mode):
                 snippet = line[:200]
                 break
         
-        entries.append({
+        entries_for_ml.append({
             'id': post['id'],
             'title': post.get('title', 'Untitled'),
             'date': date.isoformat() if date else None,
-            'layers': layers,
+            'content': md,  # Full content for ML
             'snippet': snippet,
             'url': post.get('url', ''),
             'author': post.get('author', 'Unknown'),
@@ -2425,14 +2410,223 @@ def etl_command(source, limit, slow_mode):
             'is_technical': post.get('is_technical', False),
             'technical_score': post.get('technical_score', 0.0),
             'code_blocks': post.get('code_blocks', 0),
+            'path': post.get('url', ''),  # For ML clustering
         })
+    
+    if not entries_for_ml:
+        console.print("[red]❌ No posts with content to process![/red]")
+        return
+    
+    # Run ML discovery
+    console.print("[cyan]🤖 Running ML discovery (this may take a few minutes)...[/cyan]")
+    console.print()
+    
+    try:
+        # Import ML discovery module
+        import sys
+        from pathlib import Path
+        ml_path = Path(__file__).parent.parent / 'ml_classifier'
+        sys.path.insert(0, str(ml_path))
+        
+        from discover_enriched import (
+            load_embedder, load_ner_pipeline, load_qa_pipeline,
+            extract_tech_stack, extract_patterns, extract_solutions,
+            extract_problem, extract_approach
+        )
+        import numpy as np
+        from sklearn.cluster import KMeans
+        from sklearn.feature_extraction.text import TfidfVectorizer
+        
+        # Load models
+        console.print("[dim]Loading embedder...[/dim]")
+        embedder = load_embedder()
+        
+        console.print("[dim]Loading NER model...[/dim]")
+        ner_pipeline = load_ner_pipeline()
+        
+        console.print("[dim]Loading Q&A model...[/dim]")
+        qa_pipeline = load_qa_pipeline()
+        
+        console.print()
+        
+        # Extract texts for processing
+        texts = [e['content'] for e in entries_for_ml]
+        
+        # 1. Clustering for layers
+        console.print("[cyan]1/4 Clustering for topic discovery...[/cyan]")
+        embeddings = embedder.encode(texts, show_progress_bar=True, batch_size=32)
+        
+        n_clusters = min(8, len(entries_for_ml))  # Max 8 clusters (like original layers)
+        kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
+        cluster_labels = kmeans.fit_predict(embeddings)
+        
+        # Extract keywords per cluster
+        vectorizer = TfidfVectorizer(max_features=500, stop_words='english', ngram_range=(1, 2))
+        tfidf_matrix = vectorizer.fit_transform(texts)
+        feature_names = vectorizer.get_feature_names_out()
+        
+        cluster_info = {}
+        for cluster_id in range(n_clusters):
+            cluster_mask = cluster_labels == cluster_id
+            cluster_tfidf = tfidf_matrix[cluster_mask].mean(axis=0).A1
+            top_indices = cluster_tfidf.argsort()[-10:][::-1]
+            keywords = [feature_names[i] for i in top_indices]
+            
+            # Auto-label from top keywords
+            label = keywords[0].replace('_', ' ').title()
+            
+            cluster_info[cluster_id] = {
+                'label': label,
+                'keywords': keywords,
+                'size': int(cluster_mask.sum())
+            }
+        
+        # Assign layers to entries
+        for i, entry in enumerate(entries_for_ml):
+            entry['layers'] = [cluster_info[cluster_labels[i]]['label']]
+        
+        console.print(f"[green]✓ Discovered {n_clusters} topics[/green]")
+        console.print()
+        
+        # 2. Tech Stack Extraction (NER)
+        console.print("[cyan]2/4 Extracting tech stack (NER)...[/cyan]")
+        for i, entry in enumerate(entries_for_ml):
+            if i % 50 == 0:
+                console.print(f"[dim]  Processing {i+1}/{len(entries_for_ml)}[/dim]", end='\r')
+            
+            tech_stack = extract_tech_stack(entry['content'], ner_pipeline)
+            entry['tech_stack'] = tech_stack
+        
+        total_techs = sum(len(e.get('tech_stack', [])) for e in entries_for_ml)
+        console.print(f"[green]✓ Extracted {total_techs} technology mentions[/green]")
+        console.print()
+        
+        # 3. Pattern Extraction (NER + Semantic)
+        console.print("[cyan]3/4 Extracting architectural patterns (NO hardcoded list)...[/cyan]")
+        for i, entry in enumerate(entries_for_ml):
+            if i % 50 == 0:
+                console.print(f"[dim]  Processing {i+1}/{len(entries_for_ml)}[/dim]", end='\r')
+            
+            patterns = extract_patterns(entry['content'], ner_pipeline, embedder)
+            entry['patterns'] = patterns
+        
+        total_patterns = sum(len(e.get('patterns', [])) for e in entries_for_ml)
+        console.print(f"[green]✓ Extracted {total_patterns} architectural patterns[/green]")
+        console.print()
+        
+        # 4. Solution Mining + Problem/Approach Extraction (Q&A)
+        console.print("[cyan]4/4 Mining solutions + extracting problem/approach (Q&A)...[/cyan]")
+        for entry in entries_for_ml:
+            tech_stack = entry.get('tech_stack', [])
+            content = entry['content']
+            
+            # Extract solutions (semantic similarity)
+            solutions = extract_solutions(content, tech_stack, embedder)
+            entry['solutions'] = solutions
+            
+            # Extract problem (Q&A)
+            problem = extract_problem(content, qa_pipeline)
+            entry['problem'] = problem
+            
+            # Extract approach (Q&A)
+            approach = extract_approach(content, qa_pipeline)
+            entry['approach'] = approach
+        
+        total_solutions = sum(len(e.get('solutions', [])) for e in entries_for_ml)
+        posts_with_problem = sum(1 for e in entries_for_ml if e.get('problem'))
+        posts_with_approach = sum(1 for e in entries_for_ml if e.get('approach'))
+        console.print(f"[green]✓ Mined {total_solutions} solution descriptions[/green]")
+        console.print(f"[green]✓ Extracted problem from {posts_with_problem} posts[/green]")
+        console.print(f"[green]✓ Extracted approach from {posts_with_approach} posts[/green]")
+        console.print()
+        
+        # 5. Save ML data to database
+        console.print("[cyan]5/5 Saving ML discoveries to database...[/cyan]")
+        saved_count = 0
+        for entry in entries_for_ml:
+            ml_data = {
+                'layers': entry.get('layers', []),
+                'tech_stack': entry.get('tech_stack', []),
+                'patterns': entry.get('patterns', []),
+                'solutions': entry.get('solutions', []),
+                'problem': entry.get('problem'),
+                'approach': entry.get('approach')
+            }
+            db.update_ml_discovery(entry['id'], ml_data)
+            saved_count += 1
+        
+        console.print(f"[green]✓ Saved ML data for {saved_count} posts to database[/green]")
+        console.print()
+        
+        # Remove 'content' field (too large for JSON)
+        entries = []
+        for e in entries_for_ml:
+            entry_copy = e.copy()
+            entry_copy.pop('content', None)
+            entry_copy.pop('path', None)
+            entries.append(entry_copy)
+        
+    except Exception as e:
+        console.print(f"[red]❌ ML Discovery failed: {e}[/red]")
+        console.print("[yellow]Falling back to basic timeline...[/yellow]")
+        import traceback
+        traceback.print_exc()
+        
+        # Fallback: simple entries without ML
+        entries = []
+        for post in posts:
+            md = post.get('content_markdown', '')
+            if not md:
+                continue
+            
+            date = None
+            if post.get('published_at'):
+                try:
+                    date = datetime.fromisoformat(str(post['published_at']).replace('Z', '+00:00')).date()
+                except:
+                    pass
+            
+            tags = json.loads(post.get('tags', '[]')) if isinstance(post.get('tags'), str) else post.get('tags', [])
+            
+            lines = md.split('\n')
+            snippet = ''
+            for line in lines:
+                line = line.strip()
+                if line and not line.startswith('#') and not line.startswith('---'):
+                    snippet = line[:200]
+                    break
+            
+            entries.append({
+                'id': post['id'],
+                'title': post.get('title', 'Untitled'),
+                'date': date.isoformat() if date else None,
+                'layers': ['Uncategorized'],
+                'snippet': snippet,
+                'url': post.get('url', ''),
+                'author': post.get('author', 'Unknown'),
+                'reading_time': post.get('reading_time', 0),
+                'is_technical': post.get('is_technical', False),
+                'technical_score': post.get('technical_score', 0.0),
+                'code_blocks': post.get('code_blocks', 0),
+            })
     
     entries.sort(key=lambda e: (e['date'] is None, e['date'] or '9999-12-31'))
     
     per_layer = {}
     for e in entries:
-        for layer in e['layers']:
+        for layer in e.get('layers', []):
             per_layer.setdefault(layer, []).append(e)
+    
+    # Count tech stack and patterns
+    all_techs = []
+    all_patterns = []
+    for e in entries:
+        all_techs.extend([t['name'] for t in e.get('tech_stack', [])])
+        all_patterns.extend([p['pattern'] for p in e.get('patterns', [])])
+    
+    from collections import Counter
+    tech_counter = Counter(all_techs)
+    pattern_counter = Counter(all_patterns)
     
     timeline = {
         'count': len(entries),
@@ -2444,6 +2638,17 @@ def etl_command(source, limit, slow_mode):
             'total_posts': len(entries),
             'technical_posts': sum(1 for e in entries if e.get('is_technical')),
             'layers': {layer: len(items) for layer, items in per_layer.items()},
+            'ml_discovery': {
+                'method': 'clustering + ner + zero-shot',
+                'n_topics': len(per_layer),
+                'total_tech_mentions': len(all_techs),
+                'unique_technologies': len(tech_counter),
+                'total_patterns': len(all_patterns),
+                'unique_patterns': len(pattern_counter),
+                'posts_with_solutions': sum(1 for e in entries if e.get('solutions')),
+            },
+            'top_technologies': [{'name': k, 'count': v} for k, v in tech_counter.most_common(10)],
+            'top_patterns': [{'pattern': k, 'count': v} for k, v in pattern_counter.most_common(10)],
         }
     }
     
@@ -2490,12 +2695,380 @@ def etl_command(source, limit, slow_mode):
     table.add_row("With Content", f"{with_content} ({with_content*100//total if total else 0}%)")
     table.add_row("In Timeline", str(len(entries)))
     
+    # ML stats
+    if 'ml_discovery' in timeline['stats']:
+        ml_stats = timeline['stats']['ml_discovery']
+        table.add_row("", "")
+        table.add_row("ML Topics", str(ml_stats['n_topics']))
+        table.add_row("Tech Mentions", str(ml_stats['total_tech_mentions']))
+        table.add_row("Unique Techs", str(ml_stats['unique_technologies']))
+        table.add_row("Patterns Found", str(ml_stats['total_patterns']))
+        table.add_row("With Solutions", str(ml_stats['posts_with_solutions']))
+    
     console.print(table)
     console.print()
     
-    console.print("[bold]📊 Layers:[/bold]")
+    console.print("[bold]📊 Discovered Topics (Layers):[/bold]")
     for layer, count in sorted(timeline['stats']['layers'].items(), key=lambda x: x[1], reverse=True):
         console.print(f"   • {layer}: [green]{count}[/green]")
+    console.print()
+    
+    # Show top technologies
+    if 'top_technologies' in timeline['stats'] and timeline['stats']['top_technologies']:
+        console.print("[bold]🔧 Top Technologies:[/bold]")
+        for tech in timeline['stats']['top_technologies'][:5]:
+            console.print(f"   • {tech['name']}: [green]{tech['count']}[/green]")
+        console.print()
+    
+    # Show top patterns
+    if 'top_patterns' in timeline['stats'] and timeline['stats']['top_patterns']:
+        console.print("[bold]🏗️  Top Patterns:[/bold]")
+        for pattern in timeline['stats']['top_patterns'][:5]:
+            console.print(f"   • {pattern['pattern']}: [green]{pattern['count']}[/green]")
+        console.print()
+
+
+@cli.command('reprocess-ml')
+@click.option('--source', '-s', help='Reprocess specific source only')
+@click.option('--all', 'all_sources', is_flag=True, help='Reprocess ALL sources')
+@click.option('--limit', '-l', type=int, help='Limit posts per source (for testing)')
+@click.option('--force', is_flag=True, help='Force reprocess even if already has ML data')
+def reprocess_ml_command(source, all_sources, limit, force):
+    """
+    🔄 Reprocess posts with NEW ML discovery approach
+    
+    Reprocesses existing posts FROM DATABASE that have content_markdown 
+    with the new ML approach (NO hardcoded keywords):
+    
+    • Clustering → Layers
+    • NER → Tech Stack
+    • NER+ngrams → Patterns (dynamic)
+    • Embeddings → Solutions (semantic)
+    • Q&A → Problem
+    • Q&A → Approach
+    
+    Examples:
+    
+    \b
+    # Reprocess one source
+    uv run python main.py reprocess-ml --source netflix
+    
+    \b
+    # Test with limit
+    uv run python main.py reprocess-ml --source netflix --limit 50
+    
+    \b
+    # Reprocess ALL sources
+    uv run python main.py reprocess-ml --all
+    
+    \b
+    # Force reprocess everything (even if already has ML)
+    uv run python main.py reprocess-ml --all --force
+    """
+    from ..infrastructure.pipeline_db import PipelineDB
+    from datetime import datetime, timezone
+    from pathlib import Path
+    
+    console = Console()
+    db = PipelineDB()
+    
+    console.print()
+    console.print("[bold cyan]🔄 ML Reprocessing - New Approach[/bold cyan]")
+    console.print("[dim]Using: Clustering + NER + Q&A (NO hardcoded keywords!)[/dim]")
+    console.print("[dim]Source: Database posts with content_markdown[/dim]")
+    console.print()
+    
+    # Get available sources from database
+    with db._get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT DISTINCT source FROM posts WHERE content_markdown IS NOT NULL ORDER BY source")
+        available_sources = [row['source'] for row in cursor.fetchall()]
+    
+    if not available_sources:
+        console.print("[red]❌ No posts with content_markdown found in database[/red]")
+        return
+    
+    console.print(f"[dim]Available sources in DB: {', '.join(available_sources)}[/dim]")
+    console.print()
+    
+    # Determine which sources to process
+    if all_sources:
+        sources = available_sources
+        console.print(f"[cyan]Processing ALL {len(sources)} sources from database[/cyan]")
+    elif source:
+        if source not in available_sources:
+            console.print(f"[red]❌ Source '{source}' not found in database[/red]")
+            console.print(f"[yellow]Available: {', '.join(available_sources)}[/yellow]")
+            return
+        sources = [source]
+    else:
+        console.print("[red]❌ Must specify --source or --all[/red]")
+        console.print("[yellow]Examples:[/yellow]")
+        console.print("  uv run python main.py reprocess-ml --source netflix")
+        console.print("  uv run python main.py reprocess-ml --all")
+        return
+    
+    console.print()
+    
+    total_reprocessed = 0
+    total_failed = 0
+    
+    for idx, src in enumerate(sources, 1):
+        console.print(f"[magenta]{'='*60}[/magenta]")
+        console.print(f"[magenta][{idx}/{len(sources)}] {src}[/magenta]")
+        console.print(f"[magenta]{'='*60}[/magenta]")
+        console.print()
+        
+        # Get posts with content (ready for ML)
+        with db._get_connection() as conn:
+            cursor = conn.cursor()
+            
+            if force:
+                # Reprocess all posts with content
+                query = """
+                    SELECT * FROM posts 
+                    WHERE source = ? AND content_markdown IS NOT NULL
+                    ORDER BY published_at DESC
+                """
+                params = [src]
+            else:
+                # Only posts without ML data
+                query = """
+                    SELECT * FROM posts 
+                    WHERE source = ? 
+                    AND content_markdown IS NOT NULL
+                    AND (tech_stack IS NULL OR patterns IS NULL OR ml_classified = 0)
+                    ORDER BY published_at DESC
+                """
+                params = [src]
+            
+            if limit:
+                query += " LIMIT ?"
+                params.append(limit)
+            
+            cursor.execute(query, params)
+            posts_to_process = [dict(row) for row in cursor.fetchall()]
+        
+        if not posts_to_process:
+            console.print(f"[green]✅ No posts need ML reprocessing for {src}[/green]")
+            console.print()
+            continue
+        
+        console.print(f"[yellow]Found {len(posts_to_process)} posts to reprocess[/yellow]")
+        console.print()
+        
+        # Prepare entries for ML
+        entries_for_ml = []
+        for post in posts_to_process:
+            md = post.get('content_markdown', '')
+            if not md or len(md) < 100:
+                continue
+            
+            date = None
+            if post.get('published_at'):
+                try:
+                    date = datetime.fromisoformat(str(post['published_at']).replace('Z', '+00:00')).date()
+                except:
+                    pass
+            
+            entries_for_ml.append({
+                'id': post['id'],
+                'title': post.get('title', 'Untitled'),
+                'date': date.isoformat() if date else None,
+                'content': md,
+                'path': post.get('url', ''),
+            })
+        
+        if not entries_for_ml:
+            console.print(f"[yellow]No valid content to process for {src}[/yellow]")
+            console.print()
+            continue
+        
+        console.print(f"[cyan]🤖 Running ML discovery on {len(entries_for_ml)} posts...[/cyan]")
+        console.print()
+        
+        try:
+            # Import ML modules
+            import sys
+            ml_path = Path(__file__).parent.parent / 'ml_classifier'
+            sys.path.insert(0, str(ml_path))
+            
+            from discover_enriched import (
+                load_embedder, load_ner_pipeline, load_qa_pipeline,
+                extract_tech_stack, extract_patterns, extract_solutions,
+                extract_problem, extract_approach
+            )
+            import numpy as np
+            import time
+            from sklearn.cluster import KMeans
+            from sklearn.feature_extraction.text import TfidfVectorizer
+            
+            # Load models (once per source)
+            console.print("[dim]Loading models...[/dim]")
+            start_time = time.time()
+            embedder = load_embedder()
+            ner_pipeline = load_ner_pipeline()
+            qa_pipeline = load_qa_pipeline()
+            load_time = time.time() - start_time
+            console.print(f"[dim]✓ Models loaded in {load_time:.1f}s[/dim]")
+            console.print()
+            
+            texts = [e['content'] for e in entries_for_ml]
+            total_posts = len(entries_for_ml)
+            
+            # 1. Clustering for layers
+            console.print("[cyan]📊 Step 1/6: Clustering for topics...[/cyan]")
+            step_start = time.time()
+            embeddings = embedder.encode(texts, show_progress_bar=False, batch_size=32)
+            
+            n_clusters = min(8, total_posts)
+            kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
+            cluster_labels = kmeans.fit_predict(embeddings)
+            
+            vectorizer = TfidfVectorizer(max_features=500, stop_words='english', ngram_range=(1, 2))
+            tfidf_matrix = vectorizer.fit_transform(texts)
+            feature_names = vectorizer.get_feature_names_out()
+            
+            cluster_info = {}
+            for cluster_id in range(n_clusters):
+                cluster_mask = cluster_labels == cluster_id
+                cluster_tfidf = tfidf_matrix[cluster_mask].mean(axis=0).A1
+                top_indices = cluster_tfidf.argsort()[-10:][::-1]
+                keywords = [feature_names[i] for i in top_indices]
+                label = keywords[0].replace('_', ' ').title()
+                cluster_info[cluster_id] = {'label': label}
+            
+            for i, entry in enumerate(entries_for_ml):
+                entry['layers'] = [cluster_info[cluster_labels[i]]['label']]
+            
+            step_time = time.time() - step_start
+            console.print(f"[green]✓ Discovered {n_clusters} topics in {step_time:.1f}s[/green]")
+            console.print()
+            
+            # 2-6. Process all posts with ONE combined progress bar
+            console.print("[cyan]🤖 Processing ML extractions...[/cyan]")
+            console.print()
+            
+            from rich.progress import Progress, BarColumn, TextColumn, TimeRemainingColumn, TaskProgressColumn
+            
+            with Progress(
+                TextColumn("[bold blue]{task.description}"),
+                BarColumn(bar_width=40),
+                TaskProgressColumn(),
+                TimeRemainingColumn(),
+                console=console,
+                transient=False
+            ) as progress:
+                
+                # Task for each extraction type
+                task_tech = progress.add_task("[cyan]2/6 Tech Stack      ", total=total_posts)
+                task_patterns = progress.add_task("[cyan]3/6 Patterns        ", total=total_posts)
+                task_solutions = progress.add_task("[cyan]4/6 Solutions       ", total=total_posts)
+                task_problems = progress.add_task("[cyan]5/6 Problems        ", total=total_posts)
+                task_approaches = progress.add_task("[cyan]6/6 Approaches      ", total=total_posts)
+                
+                # Extract Tech Stack
+                for entry in entries_for_ml:
+                    tech_stack = extract_tech_stack(entry['content'], ner_pipeline)
+                    entry['tech_stack'] = tech_stack
+                    progress.update(task_tech, advance=1)
+                
+                # Extract Patterns
+                for entry in entries_for_ml:
+                    patterns = extract_patterns(entry['content'], ner_pipeline, embedder)
+                    entry['patterns'] = patterns
+                    progress.update(task_patterns, advance=1)
+                
+                # Extract Solutions
+                for entry in entries_for_ml:
+                    tech_stack = entry.get('tech_stack', [])
+                    solutions = extract_solutions(entry['content'], tech_stack, embedder)
+                    entry['solutions'] = solutions
+                    progress.update(task_solutions, advance=1)
+                
+                # Extract Problems
+                for entry in entries_for_ml:
+                    problem = extract_problem(entry['content'], qa_pipeline)
+                    entry['problem'] = problem
+                    progress.update(task_problems, advance=1)
+                
+                # Extract Approaches
+                for entry in entries_for_ml:
+                    approach = extract_approach(entry['content'], qa_pipeline)
+                    entry['approach'] = approach
+                    progress.update(task_approaches, advance=1)
+            
+            # Summary stats
+            total_techs = sum(len(e.get('tech_stack', [])) for e in entries_for_ml)
+            total_patterns = sum(len(e.get('patterns', [])) for e in entries_for_ml)
+            total_solutions = sum(len(e.get('solutions', [])) for e in entries_for_ml)
+            posts_with_problem = sum(1 for e in entries_for_ml if e.get('problem'))
+            posts_with_approach = sum(1 for e in entries_for_ml if e.get('approach'))
+            
+            console.print()
+            console.print(f"[green]✓ Extracted:[/green]")
+            console.print(f"  • {total_techs} tech stack items")
+            console.print(f"  • {total_patterns} patterns")
+            console.print(f"  • {total_solutions} solutions")
+            console.print(f"  • {posts_with_problem} problems")
+            console.print(f"  • {posts_with_approach} approaches")
+            console.print()
+            
+            # Save to database with progress
+            console.print("[cyan]💾 Saving ML data to database...[/cyan]")
+            with Progress(
+                TextColumn("[bold blue]{task.description}"),
+                BarColumn(bar_width=40),
+                TaskProgressColumn(),
+                TimeRemainingColumn(),
+                console=console,
+                transient=False
+            ) as progress:
+                task = progress.add_task("[cyan]Saving to DB", total=total_posts)
+                saved = 0
+                for entry in entries_for_ml:
+                    ml_data = {
+                        'layers': entry.get('layers', []),
+                        'tech_stack': entry.get('tech_stack', []),
+                        'patterns': entry.get('patterns', []),
+                        'solutions': entry.get('solutions', []),
+                        'problem': entry.get('problem'),
+                        'approach': entry.get('approach')
+                    }
+                    db.update_ml_discovery(entry['id'], ml_data)
+                    saved += 1
+                    progress.update(task, advance=1)
+            
+            console.print(f"[green]✅ Saved ML data for {saved} posts[/green]")
+            total_reprocessed += saved
+            
+        except Exception as e:
+            console.print(f"[red]❌ ML processing failed for {src}: {e}[/red]")
+            import traceback
+            traceback.print_exc()
+            total_failed += 1
+        
+        console.print()
+    
+    # Final summary
+    console.print(f"[bold green]{'='*60}[/bold green]")
+    console.print(f"[bold green]🎉 Reprocessing Complete![/bold green]")
+    console.print(f"[bold green]{'='*60}[/bold green]")
+    console.print()
+    
+    table = Table(show_header=True, border_style="green")
+    table.add_column("Metric", style="cyan")
+    table.add_column("Value", style="yellow", justify="right")
+    
+    table.add_row("Sources Processed", str(len(sources) - total_failed))
+    table.add_row("Posts Reprocessed", str(total_reprocessed))
+    if total_failed > 0:
+        table.add_row("Failed Sources", str(total_failed))
+    
+    console.print(table)
+    console.print()
+    
+    console.print("[cyan]✨ All posts now have ML-discovered data![/cyan]")
     console.print()
 
 

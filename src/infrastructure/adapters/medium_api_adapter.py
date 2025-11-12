@@ -428,25 +428,19 @@ class MediumApiAdapter(PostRepository):
                 all_post_ids.extend(valid_post_ids)
                 collected += len(valid_post_ids)
                 
-                if invalid_ids:
-                    print(f"Skipped {len(invalid_ids)} invalid post IDs on page {page + 1}")
-                
                 # Check pagination
                 page_info = posts_connection.get("pageInfo", {})
                 if not page_info.get("hasNextPage"):
-                    print(f"Reached end of publication at page {page + 1} (hasNextPage=False)")
                     break
                     
                 cursor = page_info.get("endCursor")
                 if not cursor:
-                    print(f"No end cursor available at page {page + 1}")
                     break
                 
                 page += 1
                 time.sleep(0.3)  # Rate limiting
                 
-            except Exception as e:
-                print(f"Error in publication all query: {e}")
+            except Exception:
                 break
         
         return all_post_ids

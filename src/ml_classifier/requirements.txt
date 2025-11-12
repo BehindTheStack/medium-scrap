@@ -5,4 +5,5 @@ numpy
 rich
 tqdm
 sentence-transformers>=2.2.0
+transformers>=4.30.0
 torch

@@ -52,6 +52,18 @@ class PipelineDB:
             if 'metadata_json' not in columns:
                 cursor.execute("ALTER TABLE posts ADD COLUMN metadata_json TEXT")
             
+            # Add ML discovery columns (NEW)
+            if 'tech_stack' not in columns:
+                cursor.execute("ALTER TABLE posts ADD COLUMN tech_stack TEXT")  # JSON array
+            if 'patterns' not in columns:
+                cursor.execute("ALTER TABLE posts ADD COLUMN patterns TEXT")  # JSON array
+            if 'solutions' not in columns:
+                cursor.execute("ALTER TABLE posts ADD COLUMN solutions TEXT")  # JSON array
+            if 'problem' not in columns:
+                cursor.execute("ALTER TABLE posts ADD COLUMN problem TEXT")
+            if 'approach' not in columns:
+                cursor.execute("ALTER TABLE posts ADD COLUMN approach TEXT")
+            
             # Create index for content search (only after column exists)
             cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_posts_has_content 
@@ -367,6 +379,54 @@ class PipelineDB:
                 """)
             
             return [dict(row) for row in cursor.fetchall()]
+    
+    def update_ml_discovery(self, post_id: str, ml_data: Dict[str, Any]) -> None:
+        """
+        Update ML discovery fields for a post.
+        
+        Args:
+            post_id: Post ID
+            ml_data: Dictionary containing:
+                - layers: List[str] - Topic labels from clustering
+                - tech_stack: List[Dict] - Technologies extracted by NER
+                - patterns: List[Dict] - Architectural patterns from zero-shot
+                - solutions: List[str] - Solution descriptions
+                - problem: str (optional) - Main problem addressed
+                - approach: str (optional) - Main approach taken
+        """
+        now = datetime.utcnow().isoformat()
+        
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            
+            # Serialize JSON fields
+            layers_json = json.dumps(ml_data.get('layers', []))
+            tech_stack_json = json.dumps(ml_data.get('tech_stack', []))
+            patterns_json = json.dumps(ml_data.get('patterns', []))
+            solutions_json = json.dumps(ml_data.get('solutions', []))
+            
+            cursor.execute("""
+                UPDATE posts
+                SET 
+                    ml_layers = ?,
+                    tech_stack = ?,
+                    patterns = ?,
+                    solutions = ?,
+                    problem = ?,
+                    approach = ?,
+                    ml_classified = 1,
+                    ml_processed_at = ?
+                WHERE id = ?
+            """, (
+                layers_json,
+                tech_stack_json,
+                patterns_json,
+                solutions_json,
+                ml_data.get('problem'),
+                ml_data.get('approach'),
+                now,
+                post_id
+            ))
     
     def get_posts_needing_ml_classification(self) -> List[Dict]:
         """Get posts with markdown but not ML classified"""
