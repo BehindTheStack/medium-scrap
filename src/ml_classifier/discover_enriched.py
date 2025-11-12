@@ -273,12 +273,18 @@ def extract_tech_stack(text: str, ner_pipeline) -> List[Dict[str, Any]]:
             else:
                 break
         
-        # Clean up subword tokens and whitespace
+        # Clean up subword tokens, whitespace, and extra spaces
         word_clean = word.replace('##', '').replace('  ', ' ').strip()
+        # Remove incomplete words (likely fragmentation)
+        if any(fragment in word_clean.lower() for fragment in ['enco ding', 'co smos', 'mae ', 'di ributed', 'a traction']):
+            i += 1
+            continue
+            
         word_lower = word_clean.lower()
         
-        # Skip if too short or in blacklist
-        if len(word_clean) >= 3 and word_lower not in blacklist:
+        # Skip if too short, in blacklist, or looks like fragment
+        min_length = 4 if not any(tech in word_lower for tech in tech_indicators) else 3
+        if len(word_clean) >= min_length and word_lower not in blacklist:
             # Keep ORG (organizations/products/tools) and high-confidence MISC
             if entity_type == 'ORG' or (entity_type == 'MISC' and score > 0.96):
                 # Boost score if it's a known tech term
@@ -294,14 +300,25 @@ def extract_tech_stack(text: str, ner_pipeline) -> List[Dict[str, Any]]:
         
         i += 1
     
-    # Deduplicate and filter
+    # Post-process: clean up and deduplicate
     tech_mentions = []
     seen = set()
     
     for entity in merged_entities:
-        word_lower = entity['name'].lower()
-        if word_lower not in seen:
+        name = entity['name']
+        # Fix common spacing issues
+        name = name.replace(' raphQL', 'raphQL')  # G raphQL → GraphQL
+        name = name.replace('  ', ' ').strip()
+        
+        # Skip duplicates (e.g., "Muse Muse" → "Muse")
+        words = name.split()
+        if len(words) == 2 and words[0] == words[1]:
+            name = words[0]
+        
+        word_lower = name.lower()
+        if word_lower not in seen and len(name) >= 3:
             seen.add(word_lower)
+            entity['name'] = name  # Update with cleaned name
             tech_mentions.append(entity)
     
     # Sort by score and return top 12
@@ -329,12 +346,14 @@ def extract_solutions(text: str, tech_stack: List[Dict], embedder) -> List[str]:
     solutions = []
     
     try:
-        # Reference embeddings for solution-related content
+        # Improved templates focusing on technical solutions
         solution_templates = [
-            "We built a solution to solve the problem",
-            "The implementation uses technology to achieve results",
-            "We developed a system that improves performance",
-            "Our approach solved the challenge by implementing"
+            "We built and deployed a distributed system using microservices",
+            "The implementation leverages machine learning and data pipelines",
+            "Our solution uses Kafka, Spark, and cloud infrastructure",
+            "We developed an architecture with APIs and databases",
+            "The system implements caching, load balancing, and monitoring",
+            "We created a platform combining multiple technologies"
         ]
         
         # Get embeddings for templates
@@ -357,10 +376,10 @@ def extract_solutions(text: str, tech_stack: List[Dict], embedder) -> List[str]:
         similarities = cosine_similarity(sentence_embeddings, template_embeddings)
         max_similarities = similarities.max(axis=1)  # Max similarity for each sentence
         
-        # Find sentences with high similarity (relaxed threshold)
+        # Find sentences with high similarity
         for i, (sentence, sim) in enumerate(zip(sentences, max_similarities)):
             # Semantic similarity to solution templates
-            if sim > 0.40:  # Relaxed from 0.5
+            if sim > 0.38:  # Slightly lower for better recall
                 # Check if mentions any technology (if tech_stack exists)
                 mentions_tech = False
                 if tech_stack:
@@ -369,11 +388,16 @@ def extract_solutions(text: str, tech_stack: List[Dict], embedder) -> List[str]:
                         for tech in tech_stack
                     )
                 
-                # Accept if: mentions tech, OR high similarity, OR contains solution keywords
-                solution_keywords = ['built', 'implemented', 'developed', 'created', 'designed', 'approach', 'solution', 'system']
+                # Better solution keywords focusing on technical implementations
+                solution_keywords = [
+                    'built', 'implemented', 'developed', 'created', 'designed',
+                    'architecture', 'infrastructure', 'pipeline', 'platform',
+                    'service', 'api', 'database', 'cache', 'deploy', 'scale'
+                ]
                 has_solution_keyword = any(kw in sentence.lower() for kw in solution_keywords)
                 
-                if mentions_tech or sim > 0.55 or has_solution_keyword:
+                # More selective: require keyword AND (tech mention OR high similarity)
+                if has_solution_keyword and (mentions_tech or sim > 0.50):
                     solutions.append(sentence.strip())
                     
                     if len(solutions) >= 5:
@@ -402,31 +426,30 @@ def extract_problem(text: str, qa_pipeline) -> str:
         return None
 
     try:
-        # Use the cleaned full text as context (do not truncate here)
+        # Use the cleaned full text as context
         context = clean_markdown(text)
 
-        # Ask the model (the pipeline will handle internal truncation if needed)
-        result = qa_pipeline(
-            question="What problem or challenge did they face?",
-            context=context
-        )
+        # Try multiple specific questions for better results
+        questions = [
+            "What technical problem or challenge did the engineering team face?",
+            "What was the main scalability or performance issue?",
+            "What problem needed to be solved or what challenge did they encounter?"
+        ]
         
-        # Check if answer is substantial
-        answer = result['answer'].strip()
-        if len(answer) > 20 and result['score'] > 0.1:
-            return answer
+        best_answer = None
+        best_score = 0.0
         
-        # Try alternative question
-        result2 = qa_pipeline(
-            question="What issue needed to be solved?",
-            context=context
-        )
+        for question in questions:
+            result = qa_pipeline(question=question, context=context)
+            answer = result['answer'].strip()
+            score = result['score']
+            
+            # Keep the best answer (substantial and high confidence)
+            if len(answer) > 20 and score > best_score and score > 0.08:
+                best_answer = answer
+                best_score = score
         
-        answer2 = result2['answer'].strip()
-        if len(answer2) > 20 and result2['score'] > 0.1:
-            return answer2
-        
-        return None
+        return best_answer if best_answer else None
         
     except Exception as e:
         print(f"Problem extraction error: {e}")
@@ -449,32 +472,30 @@ def extract_approach(text: str, qa_pipeline) -> str:
         return None
 
     try:
-        # Use cleaned full text as context (no hard truncation). If required,
-        # callers can chunk using chunk_text(). We avoid discarding content here.
+        # Use cleaned full text as context
         context = clean_markdown(text)
 
-        # Ask the model
-        result = qa_pipeline(
-            question="How did they solve the problem?",
-            context=context
-        )
+        # Try multiple questions to capture different solution aspects
+        questions = [
+            "What technical approach or architecture did they use to solve this?",
+            "How did the engineering team implement the solution?",
+            "What was their technical solution or approach?"
+        ]
         
-        # Check if answer is substantial
-        answer = result['answer'].strip()
-        if len(answer) > 20 and result['score'] > 0.1:
-            return answer
+        best_answer = None
+        best_score = 0.0
         
-        # Try alternative question
-        result2 = qa_pipeline(
-            question="What was their solution approach?",
-            context=context
-        )
+        for question in questions:
+            result = qa_pipeline(question=question, context=context)
+            answer = result['answer'].strip()
+            score = result['score']
+            
+            # Keep the best answer
+            if len(answer) > 20 and score > best_score and score > 0.08:
+                best_answer = answer
+                best_score = score
         
-        answer2 = result2['answer'].strip()
-        if len(answer2) > 20 and result2['score'] > 0.1:
-            return answer2
-        
-        return None
+        return best_answer if best_answer else None
         
     except Exception as e:
         print(f"Approach extraction error: {e}")
