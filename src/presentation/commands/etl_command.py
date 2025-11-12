@@ -1,202 +1,489 @@
-"""
-ETL Command - Extract, Transform, Load with ML
-Enrich posts + Generate timeline with ML discovery
+"""ETL Command - Extract, Transform, Load with ML.
+
+This module provides the main ETL pipeline command that:
+1. Enriches posts with HTML and Markdown content
+2. Performs ML discovery (tech stack, patterns, solutions)
+3. Generates timeline in JSON and Markdown formats
+
+The pipeline processes posts from the database and enriches them with:
+- Content extraction (HTML, Markdown)
+- Technical classification
+- ML-based discovery (clustering, NER, Q&A)
+- Timeline generation with layer grouping
+
+Author: BehindTheStack Team
+License: MIT
 """
 
 import json
 import re
 import time
-from pathlib import Path
-from datetime import datetime
 from collections import Counter
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 
 import click
 from rich.console import Console
 from rich.table import Table
 
-from ...infrastructure.pipeline_db import PipelineDB
-from ...infrastructure.adapters.medium_api_adapter import MediumApiAdapter
-from ...infrastructure.config.source_manager import SourceConfigManager
-from ...infrastructure import content_extractor
-from ...domain.entities.publication import Post, PostId, Author
-from ..helpers.ml_processor import MLProcessor
-from ..helpers.progress_display import ProgressDisplay
-from ..helpers.text_cleaner import clean_markdown
+from src.domain.entities.publication import Author, Post, PostId
+from src.infrastructure import content_extractor
+from src.infrastructure.adapters.medium_api_adapter import MediumApiAdapter
+from src.infrastructure.config.source_manager import SourceConfigManager
+from src.infrastructure.external.repositories import (
+    InMemoryPublicationRepository
+)
+from src.infrastructure.pipeline_db import PipelineDB
+from src.presentation.helpers.ml_processor import MLProcessor
+from src.presentation.helpers.progress_display import ProgressDisplay
+from src.presentation.helpers.text_cleaner import clean_markdown
+
+
+# Constants
+SLOW_MODE_DELAY = 60  # seconds between requests
+NORMAL_MODE_DELAY = 3  # seconds between requests
+PROGRESS_DISPLAY_INTERVAL = 10
+MAX_SNIPPET_LENGTH = 200
+MAX_TITLE_DISPLAY_LENGTH = 80
+TIMELINE_PREVIEW_LIMIT = 10
+TOP_ITEMS_DISPLAY_LIMIT = 5
+MIN_CONTENT_LENGTH = 100
 
 
 @click.command('etl')
-@click.option('--source', '-s', required=True, help='Source to process (e.g., netflix)')
-@click.option('--limit', '-l', type=int, help='Limit posts to process (for testing)')
-@click.option('--slow-mode', is_flag=True, help='Ultra slow mode: 1 post per minute (avoid rate limiting)')
-def etl_command(source, limit, slow_mode):
-    """
-    🚀 ETL Pipeline: Enrich + ML Discovery + Timeline
+@click.option(
+    '--source',
+    '-s',
+    required=True,
+    help='Source to process (e.g., netflix)'
+)
+@click.option(
+    '--limit',
+    '-l',
+    type=int,
+    help='Limit posts to process (for testing)'
+)
+@click.option(
+    '--slow-mode',
+    is_flag=True,
+    help='Ultra slow mode: 1 post per minute (avoid rate limiting)'
+)
+def etl_command(source: str, limit: Optional[int], slow_mode: bool) -> None:
+    """ETL Pipeline: Enrich + ML Discovery + Timeline.
     
     Process posts already in database:
     1. Enrich with HTML and Markdown (if missing)
     2. ML discovery (tech stack, patterns, solutions, etc)
     3. Generate timeline JSON + Markdown
     
+    Args:
+        source: Source name to process (e.g., 'netflix', 'airbnb')
+        limit: Optional limit on number of posts to process
+        slow_mode: Enable slow processing (1 post/min) to avoid rate limits
+        
+    Returns:
+        None
+        
     Examples:
-    
-    \b
-    # Process all Netflix posts
-    uv run python main.py etl --source netflix
-    
-    \b
-    # Test with 20 posts
-    uv run python main.py etl --source netflix --limit 20
-    
-    \b
-    # Slow mode (avoid rate limits)
-    uv run python main.py etl --source netflix --slow-mode
+        # Process all Netflix posts
+        uv run python main.py etl --source netflix
+        
+        # Test with 20 posts
+        uv run python main.py etl --source netflix --limit 20
+        
+        # Slow mode (avoid rate limits)
+        uv run python main.py etl --source netflix --slow-mode
     """
     console = Console()
     db = PipelineDB()
     
+    _print_etl_header(console, source, slow_mode)
+    
+    # Step 1: Enrich posts with HTML & Markdown
+    _enrich_posts(console, db, source, limit, slow_mode)
+    
+    # Step 2: ML Discovery & Timeline Generation
+    _generate_timeline_with_ml(console, db, source)
+
+
+def _print_etl_header(
+    console: Console,
+    source: str,
+    slow_mode: bool
+) -> None:
+    """Print ETL pipeline header.
+    
+    Args:
+        console: Rich console for output
+        source: Source name being processed
+        slow_mode: Whether slow mode is enabled
+        
+    Returns:
+        None
+    """
     if slow_mode:
         console.print()
-        console.print("[yellow]⚠️  SLOW MODE enabled: 1 post per minute to avoid rate limiting[/yellow]")
-        console.print("[dim]This will be VERY slow but safer for avoiding HTTP 429 errors[/dim]")
+        console.print(
+            "[yellow]⚠️  SLOW MODE enabled: 1 post per minute "
+            "to avoid rate limiting[/yellow]"
+        )
+        console.print(
+            "[dim]This will be VERY slow but safer for "
+            "avoiding HTTP 429 errors[/dim]"
+        )
         console.print()
     
     console.print()
     console.print("[bold cyan]🚀 ETL Pipeline: Enrich + Timeline[/bold cyan]")
     console.print(f"[dim]Source: {source}[/dim]")
     console.print()
-    
-    # Step 1: Enrich posts
-    _enrich_posts(console, db, source, limit, slow_mode)
-    
-    # Step 2: ML Discovery & Timeline
-    _generate_timeline_with_ml(console, db, source)
 
 
-def _enrich_posts(console: Console, db: PipelineDB, source: str, limit: int, slow_mode: bool):
-    """Step 1: Enrich posts with HTML & Markdown"""
-    console.print("[bold blue]Step 1/2: Enriching with HTML & Markdown...[/bold blue]")
+def _enrich_posts(
+    console: Console,
+    db: PipelineDB,
+    source: str,
+    limit: Optional[int],
+    slow_mode: bool
+) -> None:
+    """Enrich posts with HTML and Markdown content.
+    
+    Fetches HTML content, converts to Markdown, performs technical
+    classification, and updates database records.
+    
+    Args:
+        console: Rich console for output
+        db: Database instance
+        source: Source name to process
+        limit: Optional limit on posts to process
+        slow_mode: Whether to use slow processing mode
+        
+    Returns:
+        None
+    """
+    console.print(
+        "[bold blue]Step 1/2: Enriching with HTML & Markdown...[/bold blue]"
+    )
     
     adapter = MediumApiAdapter()
     config_manager = SourceConfigManager()
     
-    with db._get_connection() as conn:
-        cursor = conn.cursor()
-        
-        # Count total posts
-        cursor.execute("SELECT COUNT(*) FROM posts WHERE source = ?", [source])
-        total_posts = cursor.fetchone()[0]
-        
-        # Get posts that need enrichment
-        query = "SELECT * FROM posts WHERE source = ? AND (content_html IS NULL OR content_markdown IS NULL)"
-        params = [source]
-        if limit:
-            query += " ORDER BY published_at DESC LIMIT ?"
-            params.append(limit)
-        cursor.execute(query, params)
-        posts_to_enrich = [dict(row) for row in cursor.fetchall()]
+    # Get posts needing enrichment
+    total_posts, posts_to_enrich = _get_posts_needing_enrichment(
+        db,
+        source,
+        limit
+    )
     
     already_enriched = total_posts - len(posts_to_enrich)
     
     if not posts_to_enrich:
-        console.print(f"[green]✅ All {total_posts} posts already enriched![/green]")
+        console.print(
+            f"[green]✅ All {total_posts} posts already enriched![/green]"
+        )
         console.print()
         return
     
     if already_enriched > 0:
-        console.print(f"[dim]ℹ️  {already_enriched} posts already enriched, skipping...[/dim]")
+        console.print(
+            f"[dim]ℹ️  {already_enriched} posts already enriched, "
+            f"skipping...[/dim]"
+        )
+    
     console.print(f"[yellow]Processing {len(posts_to_enrich)} posts...[/yellow]")
     console.print()
     
+    # Process each post
+    enriched, failed, failure_reasons = _process_enrichment(
+        console,
+        db,
+        adapter,
+        config_manager,
+        source,
+        posts_to_enrich,
+        slow_mode
+    )
+    
+    _print_enrichment_summary(console, enriched, failed, failure_reasons)
+
+
+def _get_posts_needing_enrichment(
+    db: PipelineDB,
+    source: str,
+    limit: Optional[int]
+) -> Tuple[int, List[Dict[str, Any]]]:
+    """Get posts that need HTML/Markdown enrichment.
+    
+    Args:
+        db: Database instance
+        source: Source name to query
+        limit: Optional limit on results
+        
+    Returns:
+        Tuple of (total_posts, posts_to_enrich)
+    """
+    with db._get_connection() as conn:
+        cursor = conn.cursor()
+        
+        # Count total posts
+        cursor.execute(
+            "SELECT COUNT(*) FROM posts WHERE source = ?",
+            [source]
+        )
+        total_posts = cursor.fetchone()[0]
+        
+        # Get posts that need enrichment
+        query = (
+            "SELECT * FROM posts WHERE source = ? "
+            "AND (content_html IS NULL OR content_markdown IS NULL)"
+        )
+        params: List[Any] = [source]
+        
+        if limit:
+            query += " ORDER BY published_at DESC LIMIT ?"
+            params.append(limit)
+        
+        cursor.execute(query, params)
+        posts_to_enrich = [dict(row) for row in cursor.fetchall()]
+    
+    return total_posts, posts_to_enrich
+
+
+def _process_enrichment(
+    console: Console,
+    db: PipelineDB,
+    adapter: MediumApiAdapter,
+    config_manager: SourceConfigManager,
+    source: str,
+    posts: List[Dict[str, Any]],
+    slow_mode: bool
+) -> Tuple[int, int, Dict[str, int]]:
+    """Process enrichment for all posts.
+    
+    Args:
+        console: Rich console for output
+        db: Database instance
+        adapter: Medium API adapter
+        config_manager: Source configuration manager
+        source: Source name
+        posts: List of posts to enrich
+        slow_mode: Whether to use slow processing
+        
+    Returns:
+        Tuple of (enriched_count, failed_count, failure_reasons_dict)
+    """
     enriched = 0
     failed = 0
-    failure_reasons = {}
+    failure_reasons: Dict[str, int] = {}
     
-    for i, post_data in enumerate(posts_to_enrich, 1):
-        # Show progress
-        if i % 10 == 1 or i == len(posts_to_enrich):
-            console.print(
-                f"[cyan]Progress: {i}/{len(posts_to_enrich)} posts ({i*100//len(posts_to_enrich)}%)[/cyan]",
-                end='\r'
-            )
+    for i, post_data in enumerate(posts, 1):
+        _show_enrichment_progress(console, i, len(posts))
         
         # Add delay between posts
         if i > 1:
-            delay = 60 if slow_mode else 3
+            delay = SLOW_MODE_DELAY if slow_mode else NORMAL_MODE_DELAY
             time.sleep(delay)
         
-        try:
-            # Get config
-            try:
-                sources = config_manager.load_sources()
-                source_config = sources.get('sources', {}).get(source)
-                if source_config:
-                    from ...infrastructure.external.repositories import InMemoryPublicationRepository
-                    repo = InMemoryPublicationRepository()
-                    config = repo.create_generic_config(
-                        source_config.get('publication', post_data['publication'])
-                    )
-                else:
-                    raise ValueError("Config not found")
-            except:
-                from ...infrastructure.external.repositories import InMemoryPublicationRepository
-                repo = InMemoryPublicationRepository()
-                config = repo.create_generic_config(post_data['publication'])
-            
-            author_name = post_data.get('author') or 'Unknown'
-            post = Post(
-                id=PostId(post_data['id']),
-                title=post_data['title'] or 'Untitled',
-                slug=post_data.get('url', '').split('/')[-1] if post_data.get('url') else post_data['id'],
-                author=Author(
-                    id='unknown',
-                    name=author_name,
-                    username=author_name.lower().replace(' ', '_')
-                ),
-                published_at=datetime.now(),
-                reading_time=post_data.get('reading_time', 0)
-            )
-            
-            html = adapter.fetch_post_html(post, config)
-            if not html:
-                failed += 1
-                reason = "No HTML returned from API"
-                failure_reasons[reason] = failure_reasons.get(reason, 0) + 1
-                continue
-            
-            md, assets, code_blocks = content_extractor.html_to_markdown(html)
-            classification = content_extractor.classify_technical(html, code_blocks)
-            text_only = re.sub(r'[#*`\[\]()]+', ' ', md)
-            text_only = re.sub(r'\s+', ' ', text_only).strip()
-            
-            post_data['content_html'] = html
-            post_data['content_markdown'] = md
-            # Keep full cleaned content for ML processing (no hard truncation)
-            post_data['content_text'] = clean_markdown(text_only)
-            post_data['has_markdown'] = True
-            post_data['is_technical'] = classification.get('is_technical')
-            post_data['technical_score'] = classification.get('score')
-            post_data['code_blocks'] = len(code_blocks)
-            post_data['metadata'] = {
-                'classifier': classification,
-                'code_blocks': code_blocks,
-                'assets': assets
-            }
-            
-            db.add_or_update_post(post_data)
+        success, reason = _enrich_single_post(
+            db,
+            adapter,
+            config_manager,
+            source,
+            post_data
+        )
+        
+        if success:
             enriched += 1
-            
-        except Exception as e:
+        else:
             failed += 1
-            reason = str(e)[:50]
-            failure_reasons[reason] = failure_reasons.get(reason, 0) + 1
+            if reason:
+                failure_reasons[reason] = failure_reasons.get(reason, 0) + 1
     
+    return enriched, failed, failure_reasons
+
+
+def _show_enrichment_progress(
+    console: Console,
+    current: int,
+    total: int
+) -> None:
+    """Show enrichment progress.
+    
+    Args:
+        console: Rich console for output
+        current: Current post index
+        total: Total posts to process
+        
+    Returns:
+        None
+    """
+    if current % PROGRESS_DISPLAY_INTERVAL == 1 or current == total:
+        percentage = current * 100 // total
+        console.print(
+            f"[cyan]Progress: {current}/{total} posts ({percentage}%)[/cyan]",
+            end='\r'
+        )
+
+
+def _enrich_single_post(
+    db: PipelineDB,
+    adapter: MediumApiAdapter,
+    config_manager: SourceConfigManager,
+    source: str,
+    post_data: Dict[str, Any]
+) -> Tuple[bool, Optional[str]]:
+    """Enrich a single post with content and classification.
+    
+    Args:
+        db: Database instance
+        adapter: Medium API adapter
+        config_manager: Source configuration manager
+        source: Source name
+        post_data: Post data dictionary
+        
+    Returns:
+        Tuple of (success, failure_reason)
+    """
+    try:
+        # Get configuration
+        config = _get_post_config(
+            config_manager,
+            source,
+            post_data['publication']
+        )
+        
+        # Create Post entity
+        post = _create_post_entity(post_data)
+        
+        # Fetch and process HTML
+        html = adapter.fetch_post_html(post, config)
+        if not html:
+            return False, "No HTML returned from API"
+        
+        # Convert to markdown and extract metadata
+        md, assets, code_blocks = content_extractor.html_to_markdown(html)
+        classification = content_extractor.classify_technical(
+            html,
+            code_blocks
+        )
+        
+        # Clean text for ML processing
+        text_only = re.sub(r'[#*`\[\]()]+', ' ', md)
+        text_only = re.sub(r'\s+', ' ', text_only).strip()
+        
+        # Update post data
+        post_data['content_html'] = html
+        post_data['content_markdown'] = md
+        post_data['content_text'] = clean_markdown(text_only)
+        post_data['has_markdown'] = True
+        post_data['is_technical'] = classification.get('is_technical')
+        post_data['technical_score'] = classification.get('score')
+        post_data['code_blocks'] = len(code_blocks)
+        post_data['metadata'] = {
+            'classifier': classification,
+            'code_blocks': code_blocks,
+            'assets': assets
+        }
+        
+        db.add_or_update_post(post_data)
+        return True, None
+        
+    except Exception as e:
+        reason = str(e)[:50]
+        return False, reason
+
+
+def _get_post_config(
+    config_manager: SourceConfigManager,
+    source: str,
+    publication: str
+) -> Any:
+    """Get configuration for post source.
+    
+    Args:
+        config_manager: Source configuration manager
+        source: Source name
+        publication: Publication name
+        
+    Returns:
+        Configuration object for the publication
+    """
+    try:
+        sources = config_manager.load_sources()
+        source_config = sources.get('sources', {}).get(source)
+        
+        if source_config:
+            repo = InMemoryPublicationRepository()
+            return repo.create_generic_config(
+                source_config.get('publication', publication)
+            )
+        else:
+            raise ValueError("Config not found")
+    except Exception:
+        repo = InMemoryPublicationRepository()
+        return repo.create_generic_config(publication)
+
+
+def _create_post_entity(post_data: Dict[str, Any]) -> Post:
+    """Create Post entity from post data.
+    
+    Args:
+        post_data: Post data dictionary from database
+        
+    Returns:
+        Post entity instance
+    """
+    author_name = post_data.get('author') or 'Unknown'
+    
+    slug = post_data['id']
+    if post_data.get('url'):
+        slug = post_data['url'].split('/')[-1]
+    
+    return Post(
+        id=PostId(post_data['id']),
+        title=post_data['title'] or 'Untitled',
+        slug=slug,
+        author=Author(
+            id='unknown',
+            name=author_name,
+            username=author_name.lower().replace(' ', '_')
+        ),
+        published_at=datetime.now(),
+        reading_time=post_data.get('reading_time', 0)
+    )
+
+
+def _print_enrichment_summary(
+    console: Console,
+    enriched: int,
+    failed: int,
+    failure_reasons: Dict[str, int]
+) -> None:
+    """Print enrichment summary.
+    
+    Args:
+        console: Rich console for output
+        enriched: Number of successfully enriched posts
+        failed: Number of failed posts
+        failure_reasons: Dictionary of failure reasons and counts
+        
+    Returns:
+        None
+    """
     console.print()
     console.print(f"[green]✅ Enriched: {enriched}[/green]", end="")
+    
     if failed > 0:
         console.print(f" [yellow]| Failed: {failed}[/yellow]")
         if failure_reasons:
             console.print("\n[yellow]Failure reasons:[/yellow]")
-            for reason, count in sorted(failure_reasons.items(), key=lambda x: x[1], reverse=True):
+            sorted_reasons = sorted(
+                failure_reasons.items(),
+                key=lambda x: x[1],
+                reverse=True
+            )
+            for reason, count in sorted_reasons:
                 console.print(f"  • {reason}: [red]{count}[/red]")
     else:
         console.print()
@@ -204,10 +491,32 @@ def _enrich_posts(console: Console, db: PipelineDB, source: str, limit: int, slo
     console.print()
 
 
-def _generate_timeline_with_ml(console: Console, db: PipelineDB, source: str):
-    """Step 2: ML Discovery & Timeline Generation"""
-    console.print("[bold blue]Step 2/2: ML Discovery & Timeline Generation...[/bold blue]")
-    console.print("[dim]Using: Clustering + NER + Q&A (NO hardcoded keywords!)[/dim]")
+def _generate_timeline_with_ml(
+    console: Console,
+    db: PipelineDB,
+    source: str
+) -> None:
+    """Generate timeline with ML discovery.
+    
+    Runs ML processing on all posts with content and generates
+    timeline files in JSON and Markdown formats.
+    
+    Args:
+        console: Rich console for output
+        db: Database instance
+        source: Source name to process
+        
+    Returns:
+        None
+    """
+    console.print(
+        "[bold blue]Step 2/2: ML Discovery & "
+        "Timeline Generation...[/bold blue]"
+    )
+    console.print(
+        "[dim]Using: Clustering + NER + Q&A "
+        "(NO hardcoded keywords!)[/dim]"
+    )
     console.print()
     
     posts = db.get_posts_with_content(source=source)
@@ -219,21 +528,39 @@ def _generate_timeline_with_ml(console: Console, db: PipelineDB, source: str):
     console.print(f"[yellow]Processing {len(posts)} posts with ML...[/yellow]")
     console.print()
     
-    # Prepare data for ML
+    # Prepare entries for ML
+    entries_for_ml = _prepare_ml_entries(posts)
+    
+    if not entries_for_ml:
+        console.print("[red]❌ No posts with valid content![/red]")
+        return
+    
+    # Run ML processing
+    _run_ml_processing(console, db, entries_for_ml)
+    
+    # Generate and save timeline files
+    _save_timeline(console, entries_for_ml, source, posts)
+
+
+def _prepare_ml_entries(
+    posts: List[Dict[str, Any]]
+) -> List[Dict[str, Any]]:
+    """Prepare posts for ML processing.
+    
+    Args:
+        posts: List of post dictionaries from database
+        
+    Returns:
+        List of entries formatted for ML processor
+    """
     entries_for_ml = []
+    
     for post in posts:
         md = post.get('content_markdown', '')
         if not md:
             continue
         
-        date = None
-        if post.get('published_at'):
-            try:
-                date = datetime.fromisoformat(
-                    str(post['published_at']).replace('Z', '+00:00')
-                ).date()
-            except:
-                pass
+        date = _parse_post_date(post.get('published_at'))
         
         entries_for_ml.append({
             'id': post['id'],
@@ -248,22 +575,63 @@ def _generate_timeline_with_ml(console: Console, db: PipelineDB, source: str):
             'code_blocks': post.get('code_blocks', 0),
         })
     
-    if not entries_for_ml:
-        console.print("[red]❌ No posts with valid content![/red]")
-        return
+    return entries_for_ml
+
+
+def _parse_post_date(published_at: Any) -> Optional[datetime]:
+    """Parse published_at to datetime.
     
-    # Run ML processing
+    Args:
+        published_at: Published date string or None
+        
+    Returns:
+        Parsed datetime.date or None if parsing fails
+    """
+    if not published_at:
+        return None
+    
+    try:
+        return datetime.fromisoformat(
+            str(published_at).replace('Z', '+00:00')
+        ).date()
+    except Exception:
+        return None
+
+
+def _run_ml_processing(
+    console: Console,
+    db: PipelineDB,
+    entries: List[Dict[str, Any]]
+) -> None:
+    """Run ML processing on entries.
+    
+    Args:
+        console: Rich console for output
+        db: Database instance
+        entries: List of entries to process
+        
+    Returns:
+        None
+        
+    Raises:
+        Exception: If ML processing fails
+    """
     ml_processor = MLProcessor(console)
     ml_processor.load_models()
     
     try:
-        stats = ml_processor.process_posts(entries_for_ml)
+        ml_processor.process_posts(entries)
         
         # Save ML data to database
         console.print("[cyan]💾 Saving ML data to database...[/cyan]")
+        
         with ProgressDisplay.create_simple_progress(console) as progress:
-            task = progress.add_task("[cyan]Saving to DB", total=len(entries_for_ml))
-            for entry in entries_for_ml:
+            task = progress.add_task(
+                "[cyan]Saving to DB",
+                total=len(entries)
+            )
+            
+            for entry in entries:
                 ml_data = {
                     'layers': entry.get('layers', []),
                     'tech_stack': entry.get('tech_stack', []),
@@ -275,67 +643,153 @@ def _generate_timeline_with_ml(console: Console, db: PipelineDB, source: str):
                 db.update_ml_discovery(entry['id'], ml_data)
                 progress.update(task, advance=1)
         
-        console.print(f"[green]✓ Saved ML data to database[/green]")
+        console.print("[green]✓ Saved ML data to database[/green]")
         console.print()
         
     except Exception as e:
         console.print(f"[red]❌ ML Discovery failed: {e}[/red]")
         import traceback
         traceback.print_exc()
+        raise
+
+
+def _save_timeline(
+    console: Console,
+    entries: List[Dict[str, Any]],
+    source: str,
+    posts: List[Dict[str, Any]]
+) -> None:
+    """Save timeline to JSON and Markdown files.
     
-    # Generate timeline files
-    _save_timeline(console, entries_for_ml, source, posts)
+    Args:
+        console: Rich console for output
+        entries: List of processed entries
+        source: Source name
+        posts: Original posts from database
+        
+    Returns:
+        None
+    """
+    # Prepare clean entries (remove large content field)
+    clean_entries = _prepare_clean_entries(entries)
+    
+    # Sort by date
+    clean_entries.sort(
+        key=lambda e: (e['date'] is None, e['date'] or '9999-12-31')
+    )
+    
+    # Build timeline structure
+    timeline = _build_timeline_structure(clean_entries, source, posts)
+    
+    # Save files
+    output_dir = Path("outputs")
+    output_dir.mkdir(exist_ok=True)
+    
+    json_file = output_dir / f"{source}_timeline.json"
+    md_file = output_dir / f"{source}_timeline.md"
+    
+    _save_json_timeline(json_file, timeline)
+    _save_markdown_timeline(md_file, timeline)
+    
+    console.print(f"[green]✅ {json_file.name}[/green]")
+    console.print(f"[green]✅ {md_file.name}[/green]")
+    console.print()
+    
+    # Print summary
+    _print_summary(console, timeline, source)
 
 
-def _save_timeline(console: Console, entries: list, source: str, posts: list):
-    """Save timeline to JSON and Markdown"""
-    # Remove 'content' field (too large)
+def _prepare_clean_entries(
+    entries: List[Dict[str, Any]]
+) -> List[Dict[str, Any]]:
+    """Prepare clean entries without large content fields.
+    
+    Args:
+        entries: List of entries with content
+        
+    Returns:
+        List of clean entries with snippets instead of full content
+    """
     clean_entries = []
+    
     for e in entries:
         entry_copy = e.copy()
         entry_copy.pop('content', None)
         
         # Add snippet
         md = e.get('content', '')
-        lines = md.split('\n')
-        snippet = ''
-        for line in lines:
-            line = line.strip()
-            if line and not line.startswith('#') and not line.startswith('---'):
-                snippet = line[:200]
-                break
+        snippet = _extract_snippet(md)
         entry_copy['snippet'] = snippet
         
         clean_entries.append(entry_copy)
     
-    clean_entries.sort(key=lambda e: (e['date'] is None, e['date'] or '9999-12-31'))
+    return clean_entries
+
+
+def _extract_snippet(content: str) -> str:
+    """Extract snippet from content.
     
+    Args:
+        content: Full content markdown
+        
+    Returns:
+        Short snippet (max 200 chars)
+    """
+    lines = content.split('\n')
+    
+    for line in lines:
+        line = line.strip()
+        if line and not line.startswith('#') and not line.startswith('---'):
+            return line[:MAX_SNIPPET_LENGTH]
+    
+    return ''
+
+
+def _build_timeline_structure(
+    entries: List[Dict[str, Any]],
+    source: str,
+    posts: List[Dict[str, Any]]
+) -> Dict[str, Any]:
+    """Build timeline data structure.
+    
+    Args:
+        entries: List of clean entries
+        source: Source name
+        posts: Original posts from database
+        
+    Returns:
+        Timeline dictionary with all metadata and stats
+    """
     # Group by layer
-    per_layer = {}
-    for e in clean_entries:
+    per_layer: Dict[str, List[Dict[str, Any]]] = {}
+    for e in entries:
         for layer in e.get('layers', ['Uncategorized']):
             per_layer.setdefault(layer, []).append(e)
     
-    # Count tech stack and patterns
+    # Count technologies and patterns
     all_techs = []
     all_patterns = []
-    for e in clean_entries:
+    for e in entries:
         all_techs.extend([t['name'] for t in e.get('tech_stack', [])])
         all_patterns.extend([p['pattern'] for p in e.get('patterns', [])])
     
     tech_counter = Counter(all_techs)
     pattern_counter = Counter(all_patterns)
     
-    timeline = {
-        'count': len(clean_entries),
+    return {
+        'count': len(entries),
         'publication': posts[0]['publication'] if posts else source,
         'source': source,
-        'posts': clean_entries,
+        'posts': entries,
         'per_layer': per_layer,
         'stats': {
-            'total_posts': len(clean_entries),
-            'technical_posts': sum(1 for e in clean_entries if e.get('is_technical')),
-            'layers': {layer: len(items) for layer, items in per_layer.items()},
+            'total_posts': len(entries),
+            'technical_posts': sum(
+                1 for e in entries if e.get('is_technical')
+            ),
+            'layers': {
+                layer: len(items) for layer, items in per_layer.items()
+            },
             'ml_discovery': {
                 'method': 'clustering + ner + qa',
                 'n_topics': len(per_layer),
@@ -343,59 +797,114 @@ def _save_timeline(console: Console, entries: list, source: str, posts: list):
                 'unique_technologies': len(tech_counter),
                 'total_patterns': len(all_patterns),
                 'unique_patterns': len(pattern_counter),
-                'posts_with_solutions': sum(1 for e in clean_entries if e.get('solutions')),
+                'posts_with_solutions': sum(
+                    1 for e in entries if e.get('solutions')
+                ),
             },
-            'top_technologies': [{'name': k, 'count': v} for k, v in tech_counter.most_common(10)],
-            'top_patterns': [{'pattern': k, 'count': v} for k, v in pattern_counter.most_common(10)],
+            'top_technologies': [
+                {'name': k, 'count': v}
+                for k, v in tech_counter.most_common(10)
+            ],
+            'top_patterns': [
+                {'pattern': k, 'count': v}
+                for k, v in pattern_counter.most_common(10)
+            ],
         }
     }
+
+
+def _save_json_timeline(file_path: Path, timeline: Dict[str, Any]) -> None:
+    """Save timeline as JSON file.
     
-    output_dir = Path("outputs")
-    output_dir.mkdir(exist_ok=True)
+    Args:
+        file_path: Path to save JSON file
+        timeline: Timeline dictionary
+        
+    Returns:
+        None
+    """
+    file_path.write_text(
+        json.dumps(timeline, indent=2, ensure_ascii=False),
+        encoding='utf-8'
+    )
+
+
+def _save_markdown_timeline(
+    file_path: Path,
+    timeline: Dict[str, Any]
+) -> None:
+    """Save timeline as Markdown file.
     
-    json_file = output_dir / f"{source}_timeline.json"
-    md_file = output_dir / f"{source}_timeline.md"
-    
-    # Save JSON
-    json_file.write_text(json.dumps(timeline, indent=2, ensure_ascii=False), encoding='utf-8')
-    
-    # Save Markdown
+    Args:
+        file_path: Path to save Markdown file
+        timeline: Timeline dictionary
+        
+    Returns:
+        None
+    """
     md_lines = [f"# {timeline['publication']} Timeline\n"]
-    md_lines.append(f"**Total**: {timeline['stats']['total_posts']} posts")
-    md_lines.append(f"**Technical**: {timeline['stats']['technical_posts']} posts\n")
+    md_lines.append(
+        f"**Total**: {timeline['stats']['total_posts']} posts"
+    )
+    md_lines.append(
+        f"**Technical**: {timeline['stats']['technical_posts']} posts\n"
+    )
     md_lines.append('\n## Architecture Layers\n')
     
-    for layer, items in sorted(per_layer.items(), key=lambda x: len(x[1]), reverse=True):
+    # Sort layers by size
+    sorted_layers = sorted(
+        timeline['per_layer'].items(),
+        key=lambda x: len(x[1]),
+        reverse=True
+    )
+    
+    for layer, items in sorted_layers:
         md_lines.append(f'\n### {layer} ({len(items)})\n')
-        for item in items[:10]:
-            md_lines.append(f"- **{item['date'] or 'unknown'}** — {item['title'][:80]}")
-        if len(items) > 10:
-            md_lines.append(f"  _... +{len(items) - 10} more_\n")
+        
+        # Show preview of posts
+        for item in items[:TIMELINE_PREVIEW_LIMIT]:
+            date = item['date'] or 'unknown'
+            title = item['title'][:MAX_TITLE_DISPLAY_LENGTH]
+            md_lines.append(f"- **{date}** — {title}")
+        
+        if len(items) > TIMELINE_PREVIEW_LIMIT:
+            remaining = len(items) - TIMELINE_PREVIEW_LIMIT
+            md_lines.append(f"  _... +{remaining} more_\n")
     
-    md_file.write_text('\n'.join(md_lines), encoding='utf-8')
-    
-    console.print(f"[green]✅ {json_file.name}[/green]")
-    console.print(f"[green]✅ {md_file.name}[/green]")
-    console.print()
-    
-    # Summary
-    _print_summary(console, timeline, source)
+    file_path.write_text('\n'.join(md_lines), encoding='utf-8')
 
 
-def _print_summary(console: Console, timeline: dict, source: str):
-    """Print final summary table"""
+def _print_summary(
+    console: Console,
+    timeline: Dict[str, Any],
+    source: str
+) -> None:
+    """Print final summary table.
+    
+    Args:
+        console: Rich console for output
+        timeline: Timeline dictionary with stats
+        source: Source name
+        
+    Returns:
+        None
+    """
     console.print("[bold green]🎉 Complete![/bold green]")
     console.print()
     
+    # Main stats table
     table = Table(show_header=True)
     table.add_column("Metric", style="cyan")
     table.add_column("Value", style="green", justify="right")
     
     table.add_row("Total Posts", str(timeline['stats']['total_posts']))
-    table.add_row("Technical Posts", str(timeline['stats']['technical_posts']))
+    table.add_row(
+        "Technical Posts",
+        str(timeline['stats']['technical_posts'])
+    )
     table.add_row("In Timeline", str(timeline['count']))
     
-    # ML stats
+    # ML discovery stats
     if 'ml_discovery' in timeline['stats']:
         ml_stats = timeline['stats']['ml_discovery']
         table.add_row("", "")
@@ -408,22 +917,90 @@ def _print_summary(console: Console, timeline: dict, source: str):
     console.print(table)
     console.print()
     
-    console.print("[bold]📊 Discovered Topics (Layers):[/bold]")
-    for layer, count in sorted(timeline['stats']['layers'].items(), key=lambda x: x[1], reverse=True):
-        console.print(f"   • {layer}: [green]{count}[/green]")
-    console.print()
+    # Topics/Layers
+    _print_discovered_layers(console, timeline)
     
-    # Show top technologies
-    if timeline['stats'].get('top_technologies'):
-        console.print("[bold]🔧 Top Technologies:[/bold]")
-        for tech in timeline['stats']['top_technologies'][:5]:
-            console.print(f"   • {tech['name']}: [green]{tech['count']}[/green]")
-        console.print()
+    # Top technologies
+    _print_top_technologies(console, timeline)
     
-    # Show top patterns
-    if timeline['stats'].get('top_patterns'):
-        console.print("[bold]🏗️  Top Patterns:[/bold]")
-        for pattern in timeline['stats']['top_patterns'][:5]:
-            console.print(f"   • {pattern['pattern']}: [green]{pattern['count']}[/green]")
-        console.print()
+    # Top patterns
+    _print_top_patterns(console, timeline)
 
+
+def _print_discovered_layers(
+    console: Console,
+    timeline: Dict[str, Any]
+) -> None:
+    """Print discovered architecture layers.
+    
+    Args:
+        console: Rich console for output
+        timeline: Timeline dictionary
+        
+    Returns:
+        None
+    """
+    console.print("[bold]📊 Discovered Topics (Layers):[/bold]")
+    
+    sorted_layers = sorted(
+        timeline['stats']['layers'].items(),
+        key=lambda x: x[1],
+        reverse=True
+    )
+    
+    for layer, count in sorted_layers:
+        console.print(f"   • {layer}: [green]{count}[/green]")
+    
+    console.print()
+
+
+def _print_top_technologies(
+    console: Console,
+    timeline: Dict[str, Any]
+) -> None:
+    """Print top technologies discovered.
+    
+    Args:
+        console: Rich console for output
+        timeline: Timeline dictionary
+        
+    Returns:
+        None
+    """
+    if not timeline['stats'].get('top_technologies'):
+        return
+    
+    console.print("[bold]🔧 Top Technologies:[/bold]")
+    
+    top_techs = timeline['stats']['top_technologies']
+    for tech in top_techs[:TOP_ITEMS_DISPLAY_LIMIT]:
+        console.print(f"   • {tech['name']}: [green]{tech['count']}[/green]")
+    
+    console.print()
+
+
+def _print_top_patterns(
+    console: Console,
+    timeline: Dict[str, Any]
+) -> None:
+    """Print top patterns discovered.
+    
+    Args:
+        console: Rich console for output
+        timeline: Timeline dictionary
+        
+    Returns:
+        None
+    """
+    if not timeline['stats'].get('top_patterns'):
+        return
+    
+    console.print("[bold]🏗️  Top Patterns:[/bold]")
+    
+    top_patterns = timeline['stats']['top_patterns']
+    for pattern in top_patterns[:TOP_ITEMS_DISPLAY_LIMIT]:
+        console.print(
+            f"   • {pattern['pattern']}: [green]{pattern['count']}[/green]"
+        )
+    
+    console.print()

@@ -205,7 +205,7 @@ def load_qa_pipeline():
 
 def extract_tech_stack(text: str, ner_pipeline) -> List[Dict[str, Any]]:
     """
-    Extract technology mentions using NER.
+    Extract technology mentions using NER with smart filtering.
     
     Returns:
         List of dicts with {name, type, score}
@@ -222,28 +222,91 @@ def extract_tech_stack(text: str, ner_pipeline) -> List[Dict[str, Any]]:
         print(f"NER error: {e}")
         return []
     
-    # Filter for high-confidence entities
+    # Common tech keywords to boost confidence
+    tech_indicators = {
+        'kafka', 'spark', 'hadoop', 'kubernetes', 'k8s', 'docker', 'redis', 
+        'elasticsearch', 'postgres', 'mysql', 'mongodb', 'cassandra', 'aws', 
+        'gcp', 'azure', 'react', 'vue', 'angular', 'python', 'java', 'golang',
+        'typescript', 'javascript', 'grpc', 'graphql', 'rest', 'api', 'microservice',
+        'terraform', 'ansible', 'jenkins', 'gitlab', 'github', 'prometheus',
+        'grafana', 'datadog', 'splunk', 'airflow', 'flink', 'storm', 'beam',
+        'tensorflow', 'pytorch', 'scikit', 'pandas', 'numpy', 'jupyter',
+        'metaflow', 'maestro', 'nginx', 'apache', 'tomcat', 'jetty'
+    }
+    
+    # Blacklist generic or non-tech entities
+    blacklist = {
+        'netflix', 'stranger things', 'squid game', 'nfl', 'christmas', 
+        'behind the streams', 'part', 'internet', 'time', 'real', 'page',
+        'intent', 'live', 'events', 'the', 'and', 'for', 'with', 'our',
+        'their', 'this', 'that', 'from', 'into', 'about', 'over', 'under',
+        # More non-tech terms
+        'internet scale', 'on demand', 'nfl christmas day games', 'spin',
+        'metaf', 'real time', 'live events', 'netflix technology', 'making',
+        'christmas day', 'day games', 'games', 'scale', 'demand'
+    }
+    
+    # Merge adjacent entities and filter
+    merged_entities = []
+    i = 0
+    
+    while i < len(entities):
+        current = entities[i]
+        word = current['word'].strip()
+        entity_type = current['entity_group']
+        score = current['score']
+        start = current.get('start', i)
+        end = current.get('end', start + len(word))
+        
+        # Merge adjacent entities of same type
+        while i + 1 < len(entities):
+            next_entity = entities[i + 1]
+            next_start = next_entity.get('start', 0)
+            
+            # If adjacent (within 2 chars) and same type, merge
+            if (next_entity['entity_group'] == entity_type and 
+                next_start - end <= 2):
+                word += ' ' + next_entity['word'].strip()
+                score = max(score, next_entity['score'])
+                end = next_entity.get('end', end + len(next_entity['word']))
+                i += 1
+            else:
+                break
+        
+        # Clean up subword tokens and whitespace
+        word_clean = word.replace('##', '').replace('  ', ' ').strip()
+        word_lower = word_clean.lower()
+        
+        # Skip if too short or in blacklist
+        if len(word_clean) >= 3 and word_lower not in blacklist:
+            # Keep ORG (organizations/products/tools) and high-confidence MISC
+            if entity_type == 'ORG' or (entity_type == 'MISC' and score > 0.96):
+                # Boost score if it's a known tech term
+                is_tech_term = any(tech in word_lower for tech in tech_indicators)
+                min_score = 0.82 if is_tech_term else 0.93  # Balanced threshold
+                
+                if score > min_score:
+                    merged_entities.append({
+                        'name': word_clean,
+                        'type': entity_type,
+                        'score': float(score)
+                    })
+        
+        i += 1
+    
+    # Deduplicate and filter
     tech_mentions = []
     seen = set()
     
-    for entity in entities:
-        word = entity['word'].strip()
-        entity_type = entity['entity_group']
-        score = entity['score']
-        
-        # Keep ORG (organizations/products) and MISC (technologies)
-        if entity_type in ['ORG', 'MISC'] and score > 0.85:
-            # Clean up subword tokens
-            word_clean = word.replace('##', '').strip()
-            if len(word_clean) > 2 and word_clean.lower() not in seen:
-                seen.add(word_clean.lower())
-                tech_mentions.append({
-                    'name': word_clean,
-                    'type': entity_type,
-                    'score': float(score)  # Convert numpy float32 to Python float
-                })
+    for entity in merged_entities:
+        word_lower = entity['name'].lower()
+        if word_lower not in seen:
+            seen.add(word_lower)
+            tech_mentions.append(entity)
     
-    return tech_mentions[:15]  # Top 15 mentions
+    # Sort by score and return top 12
+    tech_mentions.sort(key=lambda x: x['score'], reverse=True)
+    return tech_mentions[:12]
 
 
 def extract_solutions(text: str, tech_stack: List[Dict], embedder) -> List[str]:
@@ -294,17 +357,23 @@ def extract_solutions(text: str, tech_stack: List[Dict], embedder) -> List[str]:
         similarities = cosine_similarity(sentence_embeddings, template_embeddings)
         max_similarities = similarities.max(axis=1)  # Max similarity for each sentence
         
-        # Find sentences with high similarity
+        # Find sentences with high similarity (relaxed threshold)
         for i, (sentence, sim) in enumerate(zip(sentences, max_similarities)):
-            # High semantic similarity to solution templates
-            if sim > 0.5:
-                # Check if mentions any technology
-                mentions_tech = any(
-                    tech['name'].lower() in sentence.lower()
-                    for tech in tech_stack
-                )
+            # Semantic similarity to solution templates
+            if sim > 0.40:  # Relaxed from 0.5
+                # Check if mentions any technology (if tech_stack exists)
+                mentions_tech = False
+                if tech_stack:
+                    mentions_tech = any(
+                        tech['name'].lower() in sentence.lower()
+                        for tech in tech_stack
+                    )
                 
-                if mentions_tech or sim > 0.65:  # Either mentions tech OR very high similarity
+                # Accept if: mentions tech, OR high similarity, OR contains solution keywords
+                solution_keywords = ['built', 'implemented', 'developed', 'created', 'designed', 'approach', 'solution', 'system']
+                has_solution_keyword = any(kw in sentence.lower() for kw in solution_keywords)
+                
+                if mentions_tech or sim > 0.55 or has_solution_keyword:
                     solutions.append(sentence.strip())
                     
                     if len(solutions) >= 5:

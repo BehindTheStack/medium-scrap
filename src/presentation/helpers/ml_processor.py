@@ -33,6 +33,12 @@ class MLProcessor:
         Load all ML models (embedder, NER, QA)
         Returns: loading time in seconds
         """
+        # Suppress transformer warnings about unused weights
+        import warnings
+        import transformers
+        transformers.logging.set_verbosity_error()
+        warnings.filterwarnings('ignore', category=UserWarning, module='transformers')
+        
         # Add ML classifier path
         ml_path = Path(__file__).parent.parent.parent / 'ml_classifier'
         sys.path.insert(0, str(ml_path))
@@ -105,7 +111,7 @@ class MLProcessor:
             vectorizer = TfidfVectorizer(
                 max_features=500, 
                 stop_words='english', 
-                ngram_range=(1, 2),
+                ngram_range=(1, 3),  # Include trigrams for better context
                 min_df=1,
                 max_df=0.95,
                 token_pattern=r'\b[a-zA-Z]{3,}\b'  # Words with 3+ letters only
@@ -113,19 +119,46 @@ class MLProcessor:
             tfidf_matrix = vectorizer.fit_transform(valid_texts)
             feature_names = vectorizer.get_feature_names_out()
             
+            # Architecture layer mapping based on keywords
+            arch_patterns = {
+                'Data & ML': ['data', 'machine learning', 'ml', 'model', 'training', 'dataset', 'pipeline', 'spark', 'hadoop', 'airflow'],
+                'Backend & APIs': ['api', 'backend', 'service', 'microservice', 'rest', 'grpc', 'graphql', 'server', 'endpoint'],
+                'Infrastructure': ['infrastructure', 'deployment', 'kubernetes', 'docker', 'cloud', 'aws', 'gcp', 'terraform', 'devops'],
+                'Frontend & UI': ['frontend', 'ui', 'ux', 'react', 'vue', 'angular', 'web', 'mobile', 'app', 'interface'],
+                'Database & Storage': ['database', 'storage', 'sql', 'nosql', 'cache', 'redis', 'postgres', 'mongo', 'cassandra'],
+                'Streaming & Events': ['streaming', 'event', 'kafka', 'real time', 'realtime', 'live', 'message', 'queue'],
+                'Observability': ['monitoring', 'logging', 'metrics', 'telemetry', 'observability', 'tracing', 'alerting', 'grafana', 'prometheus'],
+                'Security': ['security', 'authentication', 'authorization', 'encryption', 'auth', 'oauth', 'identity'],
+            }
+            
             cluster_info = {}
             for cluster_id in range(n_clusters):
                 cluster_mask = cluster_labels == cluster_id
                 cluster_tfidf = tfidf_matrix[cluster_mask].mean(axis=0).A1
-                top_indices = cluster_tfidf.argsort()[-10:][::-1]
+                top_indices = cluster_tfidf.argsort()[-20:][::-1]  # Get more keywords for better matching
                 keywords = [feature_names[i] for i in top_indices if i < len(feature_names)]
                 
-                # Create meaningful label from keywords
-                if keywords:
-                    # Use top 2 keywords for label
-                    label = ' & '.join(keywords[:2]).title()
-                else:
-                    label = f"Topic {cluster_id + 1}"
+                # Try to match to architecture layer
+                label = None
+                best_match_score = 0
+                keywords_lower = [k.lower() for k in keywords]
+                
+                for arch_layer, patterns in arch_patterns.items():
+                    # Count matches
+                    matches = sum(1 for pattern in patterns if any(pattern in kw for kw in keywords_lower))
+                    if matches > best_match_score:
+                        best_match_score = matches
+                        label = arch_layer
+                
+                # Fallback to TF-IDF keywords if no good match
+                if not label or best_match_score < 2:
+                    # Use top 2-3 meaningful keywords
+                    meaningful_kw = [kw for kw in keywords[:10] 
+                                    if len(kw) > 4 and kw.lower() not in {'using', 'build', 'system', 'service', 'application'}]
+                    if meaningful_kw:
+                        label = ' & '.join(meaningful_kw[:2]).title()
+                    else:
+                        label = f"Topic {cluster_id + 1}"
                     
                 cluster_info[cluster_id] = {'label': label, 'keywords': keywords}
                 
@@ -302,11 +335,12 @@ class MLProcessor:
     
     def _extract_with_callback(self, entries: List[Dict[str, Any]], 
                                save_callback: Callable[[str, Dict], None]) -> Dict[str, int]:
-        """Extract features and save incrementally"""
+        """Extract features and save incrementally with progress bars"""
         from discover_enriched import (
             extract_tech_stack, extract_patterns, extract_solutions,
             extract_problem, extract_approach
         )
+        from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeElapsedColumn
         
         total_posts = len(entries)
         
@@ -334,75 +368,120 @@ class MLProcessor:
             'approaches_extracted': 0,
         }
         
-        # Step 2: Tech Stack (NER)
-        self.console.print(f"[cyan]📊 Step 2/6: Extracting tech stack (NER)...[/cyan]")
-        for entry in valid_entries:
-            content_clean = clean_markdown(entry['content_markdown'])
-            tech_stack = extract_tech_stack(content_clean, self.ner_pipeline)
-            entry['tech_stack'] = tech_stack
-            if tech_stack:
-                stats['tech_stack_extracted'] += 1
+        # Step 2: Tech Stack (NER) - with progress bar
+        self.console.print(f"[cyan]📊 Step 2/6: Tech Stack (NER)...[/cyan]")
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            TextColumn("({task.completed}/{task.total})"),
+            TimeElapsedColumn(),
+            console=self.console
+        ) as progress:
+            task = progress.add_task("[cyan]Extracting tech stack", total=len(valid_entries))
+            for entry in valid_entries:
+                content_clean = clean_markdown(entry['content_markdown'])
+                tech_stack = extract_tech_stack(content_clean, self.ner_pipeline)
+                entry['tech_stack'] = tech_stack
+                if tech_stack:
+                    stats['tech_stack_extracted'] += 1
+                progress.update(task, advance=1)
         self.console.print(f"[green]✓ Extracted tech stack from {stats['tech_stack_extracted']} posts[/green]")
         self.console.print()
-        
-        # Clear GPU cache
         self._clear_gpu_cache()
         
-        # Step 3: Patterns (NER + ngrams)
-        self.console.print(f"[cyan]📊 Step 3/6: Extracting patterns (NER + semantic)...[/cyan]")
-        for entry in valid_entries:
-            content_clean = clean_markdown(entry['content_markdown'])
-            patterns = extract_patterns(content_clean, self.ner_pipeline, self.embedder)
-            entry['patterns'] = patterns
-            if patterns:
-                stats['patterns_extracted'] += 1
+        # Step 3: Patterns (NER + ngrams) - with progress bar
+        self.console.print(f"[cyan]📊 Step 3/6: Patterns (NER + Semantic)...[/cyan]")
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            TextColumn("({task.completed}/{task.total})"),
+            TimeElapsedColumn(),
+            console=self.console
+        ) as progress:
+            task = progress.add_task("[cyan]Extracting patterns", total=len(valid_entries))
+            for entry in valid_entries:
+                content_clean = clean_markdown(entry['content_markdown'])
+                patterns = extract_patterns(content_clean, self.ner_pipeline, self.embedder)
+                entry['patterns'] = patterns
+                if patterns:
+                    stats['patterns_extracted'] += 1
+                progress.update(task, advance=1)
         self.console.print(f"[green]✓ Extracted patterns from {stats['patterns_extracted']} posts[/green]")
         self.console.print()
-        
-        # Clear GPU cache
         self._clear_gpu_cache()
         
-        # Step 4: Solutions (Embeddings)
-        self.console.print(f"[cyan]📊 Step 4/6: Extracting solutions (semantic similarity)...[/cyan]")
-        for entry in valid_entries:
-            content_clean = clean_markdown(entry['content_markdown'])
-            tech_stack = entry.get('tech_stack', [])
-            solutions = extract_solutions(content_clean, tech_stack, self.embedder)
-            entry['solutions'] = solutions
-            if solutions:
-                stats['solutions_extracted'] += 1
+        # Step 4: Solutions (Embeddings) - with progress bar
+        self.console.print(f"[cyan]📊 Step 4/6: Solutions (Semantic Similarity)...[/cyan]")
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            TextColumn("({task.completed}/{task.total})"),
+            TimeElapsedColumn(),
+            console=self.console
+        ) as progress:
+            task = progress.add_task("[cyan]Extracting solutions", total=len(valid_entries))
+            for entry in valid_entries:
+                content_clean = clean_markdown(entry['content_markdown'])
+                tech_stack = entry.get('tech_stack', [])
+                solutions = extract_solutions(content_clean, tech_stack, self.embedder)
+                entry['solutions'] = solutions
+                if solutions:
+                    stats['solutions_extracted'] += 1
+                progress.update(task, advance=1)
         self.console.print(f"[green]✓ Extracted solutions from {stats['solutions_extracted']} posts[/green]")
         self.console.print()
-        
-        # Clear GPU cache
         self._clear_gpu_cache()
         
-        # Step 5: Problems (Q&A)
-        self.console.print(f"[cyan]📊 Step 5/6: Extracting problems (Q&A)...[/cyan]")
-        for entry in valid_entries:
-            content_clean = clean_markdown(entry['content_markdown'])
-            problem = extract_problem(content_clean, self.qa_pipeline)
-            entry['problem'] = problem
-            if problem:
-                stats['problems_extracted'] += 1
+        # Step 5: Problems (Q&A) - with progress bar
+        self.console.print(f"[cyan]📊 Step 5/6: Problems (Q&A Model)...[/cyan]")
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            TextColumn("({task.completed}/{task.total})"),
+            TimeElapsedColumn(),
+            console=self.console
+        ) as progress:
+            task = progress.add_task("[cyan]Extracting problems", total=len(valid_entries))
+            for entry in valid_entries:
+                content_clean = clean_markdown(entry['content_markdown'])
+                problem = extract_problem(content_clean, self.qa_pipeline)
+                entry['problem'] = problem
+                if problem:
+                    stats['problems_extracted'] += 1
+                progress.update(task, advance=1)
         self.console.print(f"[green]✓ Extracted problems from {stats['problems_extracted']} posts[/green]")
         self.console.print()
-        
-        # Clear GPU cache
         self._clear_gpu_cache()
         
-        # Step 6: Approaches (Q&A)
-        self.console.print(f"[cyan]📊 Step 6/6: Extracting approaches (Q&A)...[/cyan]")
-        for entry in valid_entries:
-            content_clean = clean_markdown(entry['content_markdown'])
-            approach = extract_approach(content_clean, self.qa_pipeline)
-            entry['approach'] = approach
-            if approach:
-                stats['approaches_extracted'] += 1
+        # Step 6: Approaches (Q&A) - with progress bar
+        self.console.print(f"[cyan]📊 Step 6/6: Approaches (Q&A Model)...[/cyan]")
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            TextColumn("({task.completed}/{task.total})"),
+            TimeElapsedColumn(),
+            console=self.console
+        ) as progress:
+            task = progress.add_task("[cyan]Extracting approaches", total=len(valid_entries))
+            for entry in valid_entries:
+                content_clean = clean_markdown(entry['content_markdown'])
+                approach = extract_approach(content_clean, self.qa_pipeline)
+                entry['approach'] = approach
+                if approach:
+                    stats['approaches_extracted'] += 1
+                progress.update(task, advance=1)
         self.console.print(f"[green]✓ Extracted approaches from {stats['approaches_extracted']} posts[/green]")
         self.console.print()
-        
-        # Final GPU cleanup
         self._clear_gpu_cache()
         
         # Save all processed entries
