@@ -8,6 +8,7 @@ from rich.console import Console
 
 # Import commands
 from .commands.reprocess_ml_command import reprocess_ml_command
+from .commands.full_command import full_command
 
 
 @click.group()
@@ -18,26 +19,10 @@ def cli():
 
 # Register commands
 cli.add_command(reprocess_ml_command)
+cli.add_command(full_command)
 
 
-# Placeholder commands (to be refactored from old cli.py)
-@cli.command('full')
-@click.option('--bulk', '-b', help='Bulk collection name (e.g., tech_giants)')
-@click.option('--source', '-s', help='Single source name (e.g., netflix)')
-@click.option('--limit', '-l', type=int, help='Limit posts per source')
-def full_command(bulk, source, limit):
-    """
-    🎯 Complete pipeline: scrape → enrich → classify
-    
-    [TO BE REFACTORED]
-    """
-    console = Console()
-    console.print("[yellow]⚠️  Full command needs refactoring - use reprocess-ml for ML features[/yellow]")
-    console.print()
-    console.print("[cyan]Available:[/cyan]")
-    console.print("  • uv run python main.py reprocess-ml --all")
-
-
+# Placeholder ETL command (to be refactored)
 @cli.command('etl')
 @click.option('--source', '-s', required=True, help='Source name')
 @click.option('--limit', '-l', type=int, help='Limit posts')
@@ -45,10 +30,11 @@ def etl_command(source, limit):
     """
     📊 ETL with ML classification
     
-    [TO BE REFACTORED]
+    [TO BE REFACTORED - usar full command por enquanto]
     """
     console = Console()
-    console.print("[yellow]⚠️  ETL command needs refactoring - use reprocess-ml for ML features[/yellow]")
+    console.print("[yellow]⚠️  ETL command needs refactoring[/yellow]")
+    console.print("[cyan]Use: uv run python main.py full --source", source, "[/cyan]")
 
 
 if __name__ == "__main__":
