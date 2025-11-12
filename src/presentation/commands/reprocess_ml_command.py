@@ -174,29 +174,21 @@ def reprocess_ml_command(source, all_sources, limit, force):
         console.print()
         
         try:
-            # Run ML processing
-            stats = ml_processor.process_posts(entries_for_ml)
+            # Create callback to save incrementally
+            saved_count = {'count': 0}  # Mutable counter
             
-            # Save to database with progress
-            console.print("[cyan]💾 Saving ML data to database...[/cyan]")
-            with ProgressDisplay.create_simple_progress(console) as progress:
-                task = progress.add_task("[cyan]Saving to DB", total=len(entries_for_ml))
-                saved = 0
-                for entry in entries_for_ml:
-                    ml_data = {
-                        'layers': entry.get('layers', []),
-                        'tech_stack': entry.get('tech_stack', []),
-                        'patterns': entry.get('patterns', []),
-                        'solutions': entry.get('solutions', []),
-                        'problem': entry.get('problem'),
-                        'approach': entry.get('approach')
-                    }
-                    db.update_ml_discovery(entry['id'], ml_data)
-                    saved += 1
-                    progress.update(task, advance=1)
+            def save_post_callback(post_id: str, ml_data: dict):
+                """Save each post immediately after ML processing"""
+                db.update_ml_discovery(post_id, ml_data)
+                saved_count['count'] += 1
+                if saved_count['count'] % 10 == 0:
+                    console.print(f"[dim]💾 Saved {saved_count['count']}/{len(entries_for_ml)} posts...[/dim]", end='\r')
             
-            console.print(f"[green]✅ Saved ML data for {saved} posts[/green]")
-            total_reprocessed += saved
+            # Run ML processing with incremental save
+            stats = ml_processor.process_posts(entries_for_ml, save_callback=save_post_callback)
+            
+            console.print(f"[green]✅ Processed and saved {saved_count['count']} posts[/green]")
+            total_reprocessed += saved_count['count']
             
         except Exception as e:
             console.print(f"[red]❌ ML processing failed for {src}: {e}[/red]")

@@ -4,7 +4,7 @@ Handles all machine learning extraction operations
 """
 
 import time
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional, Callable
 from pathlib import Path
 import sys
 
@@ -181,28 +181,92 @@ class MLProcessor:
         
         return stats
     
-    def process_posts(self, entries: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def process_posts(self, entries: List[Dict[str, Any]], 
+                     save_callback: Optional[Callable[[Dict], None]] = None) -> Dict[str, int]:
         """
-        Complete ML processing pipeline for posts
+        Complete ML pipeline: clustering + feature extraction
         
         Args:
-            entries: List of post entries with 'content' field
-            
+            entries: List of post entries to process
+            save_callback: Optional callback to save each post after processing
+                         Called with (post_id, ml_data) after each post is classified
+        
         Returns:
-            Dictionary with processing statistics
+            Processing statistics
         """
         if not entries:
-            return {}
+            return {'total': 0}
         
-        # Extract texts
-        texts = [e['content'] for e in entries]
+        self.load_models()
         
-        # Step 1: Clustering
-        n_clusters, cluster_time = self.cluster_topics(entries, texts)
+        # Step 1: Clustering for layers
+        cluster_stats = self.cluster_topics(entries)
         
-        # Steps 2-6: Feature extraction
-        stats = self.extract_all_features(entries)
-        stats['n_clusters'] = n_clusters
-        stats['cluster_time'] = cluster_time
+        # Step 2: Extract all features (with incremental save if callback provided)
+        if save_callback:
+            # Process and save one by one
+            extraction_stats = self._extract_with_callback(entries, save_callback)
+        else:
+            # Original behavior: extract all, then return
+            extraction_stats = self.extract_all_features(entries)
+        
+        return {
+            **cluster_stats,
+            **extraction_stats,
+            'total': len(entries)
+        }
+    
+    def _extract_with_callback(self, entries: List[Dict[str, Any]], 
+                               save_callback: Callable[[str, Dict], None]) -> Dict[str, int]:
+        """Extract features and save incrementally"""
+        from discover_enriched import (
+            extract_tech_stack, extract_patterns, extract_solutions,
+            extract_problem, extract_approach
+        )
+        
+        stats = {
+            'tech_stack_extracted': 0,
+            'patterns_extracted': 0,
+            'solutions_extracted': 0,
+            'problems_extracted': 0,
+            'approaches_extracted': 0,
+        }
+        
+        for entry in entries:
+            content = entry.get('content_markdown', '')
+            if not content or len(content) < 100:
+                continue
+            
+            # Extract each feature
+            tech_stack = extract_tech_stack(content, self.ner_pipeline)
+            patterns = extract_patterns(content, self.ner_pipeline, self.embedder)
+            solutions = extract_solutions(content, self.embedder)
+            problem = extract_problem(content, self.qa_pipeline)
+            approach = extract_approach(content, self.qa_pipeline)
+            
+            # Update entry
+            entry['tech_stack'] = tech_stack
+            entry['patterns'] = patterns
+            entry['solutions'] = solutions
+            entry['problem'] = problem
+            entry['approach'] = approach
+            
+            # Update stats
+            if tech_stack: stats['tech_stack_extracted'] += 1
+            if patterns: stats['patterns_extracted'] += 1
+            if solutions: stats['solutions_extracted'] += 1
+            if problem: stats['problems_extracted'] += 1
+            if approach: stats['approaches_extracted'] += 1
+            
+            # SAVE IMMEDIATELY after processing this post
+            ml_data = {
+                'layers': entry.get('layers', []),
+                'tech_stack': tech_stack,
+                'patterns': patterns,
+                'solutions': solutions,
+                'problem': problem,
+                'approach': approach
+            }
+            save_callback(entry['id'], ml_data)
         
         return stats
