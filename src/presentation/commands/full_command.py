@@ -40,7 +40,6 @@ from src.infrastructure.pipeline_db import PipelineDB
 
 # Constants
 COLLECTION_MODE = 'metadata'
-ETL_TIMEOUT = 1800  # 30 minutes
 SEPARATOR_WIDTH = 50
 
 
@@ -56,7 +55,22 @@ SEPARATOR_WIDTH = 50
     type=int,
     help='Limit posts per source'
 )
-def full_command(source: Optional[str], limit: Optional[int]) -> None:
+@click.option(
+    '--force',
+    is_flag=True,
+    help='Force reprocess ML even if already classified'
+)
+@click.option(
+    '--technical-only',
+    is_flag=True,
+    help='Process and export only technical posts'
+)
+def full_command(
+    source: Optional[str],
+    limit: Optional[int],
+    force: bool,
+    technical_only: bool
+) -> None:
     """FULL Pipeline: Collect → Enrich → ML → Timeline.
     
     Complete workflow:
@@ -69,6 +83,8 @@ def full_command(source: Optional[str], limit: Optional[int]) -> None:
     Args:
         source: Specific source to process (None = all from YAML)
         limit: Optional limit on posts per source
+        force: Force reprocess ML even if already classified
+        technical_only: Process and export only technical posts
         
     Returns:
         None
@@ -82,6 +98,9 @@ def full_command(source: Optional[str], limit: Optional[int]) -> None:
         
         # Limit posts
         uv run python main.py full --source netflix --limit 50
+        
+        # Force reprocess only technical posts
+        uv run python main.py full --force --technical-only
     """
     console = Console()
     db = PipelineDB()
@@ -95,7 +114,7 @@ def full_command(source: Optional[str], limit: Optional[int]) -> None:
     _print_pipeline_header(console, len(sources))
     
     # Process each source
-    stats = _process_all_sources(console, db, sources, limit)
+    stats = _process_all_sources(console, db, sources, limit, force, technical_only)
     
     # Print final summary
     _print_final_summary(console, sources, stats)
@@ -153,7 +172,9 @@ def _process_all_sources(
     console: Console,
     db: PipelineDB,
     sources: List[str],
-    limit: Optional[int]
+    limit: Optional[int],
+    force: bool,
+    technical_only: bool
 ) -> Dict[str, Any]:
     """Process all sources through complete pipeline.
     
@@ -162,6 +183,8 @@ def _process_all_sources(
         db: Database instance
         sources: List of source names to process
         limit: Optional limit on posts per source
+        force: Force reprocess ML even if already classified
+        technical_only: Process and export only technical posts
         
     Returns:
         Statistics dictionary with counts and failures
@@ -177,7 +200,7 @@ def _process_all_sources(
         _print_source_header(console, idx, len(sources), src)
         
         try:
-            result = _process_single_source(console, db, src, limit)
+            result = _process_single_source(console, db, src, limit, force, technical_only)
             
             # Update statistics
             stats['collected'] += result['new_posts']
@@ -225,7 +248,9 @@ def _process_single_source(
     console: Console,
     db: PipelineDB,
     source: str,
-    limit: Optional[int]
+    limit: Optional[int],
+    force: bool,
+    technical_only: bool
 ) -> Dict[str, Any]:
     """Process single source through pipeline.
     
@@ -234,6 +259,8 @@ def _process_single_source(
         db: Database instance
         source: Source name
         limit: Optional limit on posts
+        force: Force reprocess ML even if already classified
+        technical_only: Process and export only technical posts
         
     Returns:
         Dictionary with processing results
@@ -254,7 +281,7 @@ def _process_single_source(
         return {'success': False, 'new_posts': 0, 'enriched': False}
     
     # Phase 3: Enrich with ETL
-    enriched = _run_etl_pipeline(console, source, limit)
+    enriched = _run_etl_pipeline(console, source, limit, force, technical_only)
     
     return {
         'success': True,
@@ -422,29 +449,55 @@ def _has_posts_to_process(
         new_posts: Number of new posts collected
         
     Returns:
-        True if there are posts to process, False otherwise
+        True if there are NEW posts or posts needing enrichment/ML, False otherwise
     """
     if new_posts > 0:
+        console.print(f"[green]✓ {new_posts} new posts to process[/green]")
         return True
     
-    # Check for existing posts
-    existing_posts = db.get_posts_by_source(source)
+    # Check for posts needing enrichment
+    posts_needing_enrichment = db.get_posts_by_source(source)
+    # Filter posts without content_markdown
+    needing_enrichment = [
+        p for p in posts_needing_enrichment 
+        if not p.get('content_markdown')
+    ]
     
-    if existing_posts:
+    if needing_enrichment:
         console.print(
-            f"[yellow]⚠️  No new posts collected, but found "
-            f"{len(existing_posts)} existing[/yellow]"
+            f"[yellow]⚠️  No new posts, but {len(needing_enrichment)} "
+            f"need enrichment[/yellow]"
         )
         return True
     
-    console.print("[red]❌ No posts (new or existing)[/red]\n")
+    # Check for posts needing ML
+    posts_needing_ml = db.get_posts_needing_ml(source=source)
+    if posts_needing_ml:
+        console.print(
+            f"[yellow]⚠️  No new posts, but {len(posts_needing_ml)} "
+            f"need ML classification[/yellow]"
+        )
+        return True
+    
+    # All posts are fully processed
+    total_posts = len(posts_needing_enrichment)
+    if total_posts > 0:
+        console.print(
+            f"[green]✅ All {total_posts} posts already fully processed[/green]"
+        )
+    else:
+        console.print("[red]❌ No posts (new or existing)[/red]")
+    
+    console.print()
     return False
 
 
 def _run_etl_pipeline(
     console: Console,
     source: str,
-    limit: Optional[int]
+    limit: Optional[int],
+    force: bool,
+    technical_only: bool
 ) -> bool:
     """Run ETL pipeline for source.
     
@@ -452,6 +505,8 @@ def _run_etl_pipeline(
         console: Rich console for output
         source: Source name
         limit: Optional limit on posts
+        force: Force reprocess ML even if already classified
+        technical_only: Process and export only technical posts
         
     Returns:
         True if successful, False otherwise
@@ -462,13 +517,15 @@ def _run_etl_pipeline(
     cmd = ["uv", "run", "python", "main.py", "etl", "--source", source]
     if limit:
         cmd.extend(["--limit", str(limit)])
+    if technical_only:
+        cmd.append("--technical-only")
     
     try:
         result = subprocess.run(
             cmd,
             capture_output=False,  # Show live output
-            text=True,
-            timeout=ETL_TIMEOUT
+            text=True
+            # No timeout - internal process, let it run as long as needed
         )
         
         if result.returncode == 0:
@@ -478,9 +535,6 @@ def _run_etl_pipeline(
             console.print("[yellow]⚠️  Enrich partially failed[/yellow]")
             return False
             
-    except subprocess.TimeoutExpired:
-        console.print("[red]❌ ETL timeout (30 minutes)[/red]")
-        return False
     except Exception as e:
         console.print(f"[red]❌ ETL failed: {e}[/red]")
         return False

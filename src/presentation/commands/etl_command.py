@@ -69,7 +69,17 @@ MIN_CONTENT_LENGTH = 100
     is_flag=True,
     help='Ultra slow mode: 1 post per minute (avoid rate limiting)'
 )
-def etl_command(source: str, limit: Optional[int], slow_mode: bool) -> None:
+@click.option(
+    '--technical-only',
+    is_flag=True,
+    help='Export only technical posts in timeline'
+)
+def etl_command(
+    source: str,
+    limit: Optional[int],
+    slow_mode: bool,
+    technical_only: bool
+) -> None:
     """ETL Pipeline: Enrich + ML Discovery + Timeline.
     
     Process posts already in database:
@@ -81,6 +91,7 @@ def etl_command(source: str, limit: Optional[int], slow_mode: bool) -> None:
         source: Source name to process (e.g., 'netflix', 'airbnb')
         limit: Optional limit on number of posts to process
         slow_mode: Enable slow processing (1 post/min) to avoid rate limits
+        technical_only: Export only technical posts in timeline
         
     Returns:
         None
@@ -94,6 +105,9 @@ def etl_command(source: str, limit: Optional[int], slow_mode: bool) -> None:
         
         # Slow mode (avoid rate limits)
         uv run python main.py etl --source netflix --slow-mode
+        
+        # Export only technical posts
+        uv run python main.py etl --source netflix --technical-only
     """
     console = Console()
     db = PipelineDB()
@@ -104,7 +118,7 @@ def etl_command(source: str, limit: Optional[int], slow_mode: bool) -> None:
     _enrich_posts(console, db, source, limit, slow_mode)
     
     # Step 2: ML Discovery & Timeline Generation
-    _generate_timeline_with_ml(console, db, source)
+    _generate_timeline_with_ml(console, db, source, technical_only)
 
 
 def _print_etl_header(
@@ -494,17 +508,22 @@ def _print_enrichment_summary(
 def _generate_timeline_with_ml(
     console: Console,
     db: PipelineDB,
-    source: str
+    source: str,
+    technical_only: bool = False
 ) -> None:
-    """Generate timeline with ML discovery.
+    """Generate timeline with ML discovery using hybrid approach.
     
-    Runs ML processing on all posts with content and generates
-    timeline files in JSON and Markdown formats.
+    Hybrid Strategy:
+    1. Get ONLY posts needing ML (not yet classified)
+    2. Cluster ALL posts globally for accurate TF-IDF
+    3. Extract features in batches for efficiency
+    4. Save incrementally with progress tracking
     
     Args:
         console: Rich console for output
         db: Database instance
         source: Source name to process
+        technical_only: Export only technical posts in timeline
         
     Returns:
         None
@@ -519,27 +538,59 @@ def _generate_timeline_with_ml(
     )
     console.print()
     
-    posts = db.get_posts_with_content(source=source)
+    # Get ONLY posts needing ML (incremental processing)
+    posts_needing_ml = db.get_posts_needing_ml(source=source)
     
-    if not posts:
-        console.print("[red]❌ No posts with content![/red]")
+    if not posts_needing_ml:
+        console.print("[green]✅ All posts already ML classified![/green]")
+        console.print("[dim]Run with --force to reprocess[/dim]")
+        console.print()
+        # Still generate timeline from existing ML data
+        all_posts = db.get_posts_with_content(source=source)
+        if all_posts:
+            _save_timeline(console, all_posts, source, all_posts, technical_only)
         return
     
-    console.print(f"[yellow]Processing {len(posts)} posts with ML...[/yellow]")
+    # Filter to ONLY technical posts (skip creative/non-eng content)
+    technical_posts = [
+        p for p in posts_needing_ml 
+        if p.get('is_technical', False) and p.get('technical_score', 0) >= 0.3
+    ]
+    
+    skipped_non_technical = len(posts_needing_ml) - len(technical_posts)
+    
+    if skipped_non_technical > 0:
+        console.print(
+            f"[dim]ℹ️  Skipping {skipped_non_technical} non-technical posts "
+            f"(focusing on engineering content)[/dim]"
+        )
+    
+    if not technical_posts:
+        console.print(
+            "[yellow]⚠️  No technical posts to process with ML[/yellow]"
+        )
+        console.print()
+        return
+    
+    console.print(
+        f"[yellow]Processing {len(technical_posts)} technical posts "
+        f"with ML classification...[/yellow]"
+    )
     console.print()
     
-    # Prepare entries for ML
-    entries_for_ml = _prepare_ml_entries(posts)
+    # Prepare entries for ML (using only technical posts)
+    entries_for_ml = _prepare_ml_entries(technical_posts)
     
     if not entries_for_ml:
         console.print("[red]❌ No posts with valid content![/red]")
         return
     
-    # Run ML processing
-    _run_ml_processing(console, db, entries_for_ml)
+    # Run ML processing with batch optimization
+    _run_ml_processing_optimized(console, db, entries_for_ml, batch_size=50)
     
-    # Generate and save timeline files
-    _save_timeline(console, entries_for_ml, source, posts)
+    # Generate and save timeline from ALL posts (including newly processed)
+    all_posts = db.get_posts_with_content(source=source)
+    _save_timeline(console, all_posts, source, all_posts, technical_only)
 
 
 def _prepare_ml_entries(
@@ -648,28 +699,253 @@ def _run_ml_processing(
         
     except Exception as e:
         console.print(f"[red]❌ ML Discovery failed: {e}[/red]")
+        raise
+
+
+def _run_ml_processing_optimized(
+    console: Console,
+    db: PipelineDB,
+    entries: List[Dict[str, Any]],
+    batch_size: int = 50
+) -> None:
+    """Run ML processing with hybrid optimization.
+    
+    Strategy:
+    1. Cluster ALL posts globally (accurate TF-IDF)
+    2. Extract features in batches (GPU efficiency)
+    3. Save incrementally (memory efficiency + resumable)
+    
+    Args:
+        console: Rich console for output
+        db: Database instance
+        entries: List of entries to process
+        batch_size: Number of posts per batch for extraction
+        
+    Returns:
+        None
+        
+    Raises:
+        Exception: If ML processing fails
+    """
+    import torch
+    from pathlib import Path
+    import sys
+    
+    # Add ML classifier path
+    ml_path = Path(__file__).parent.parent.parent / 'ml_classifier'
+    sys.path.insert(0, str(ml_path))
+    
+    from discover_enriched import (
+        extract_tech_stack, extract_patterns, extract_solutions,
+        extract_problem, extract_approach
+    )
+    from ..helpers.text_cleaner import clean_markdown
+    
+    ml_processor = MLProcessor(console)
+    ml_processor.load_models()
+    
+    try:
+        # STEP 1: Global clustering (TF-IDF needs all posts for accurate IDF)
+        console.print("[cyan]📊 Step 1/6: Global clustering for topic layers...[/cyan]")
+        texts = [e.get('content', '') for e in entries]
+        cluster_result = ml_processor.cluster_topics(entries, texts)
+        
+        # STEP 2: Extract features in batches
+        total_batches = (len(entries) + batch_size - 1) // batch_size
+        console.print(f"[cyan]🤖 Extracting features in {total_batches} batches of {batch_size}...[/cyan]")
+        console.print()
+        
+        stats = {
+            'tech_count': 0,
+            'patterns_count': 0,
+            'solutions_count': 0,
+            'problems_count': 0,
+            'approaches_count': 0
+        }
+        
+        for batch_num in range(total_batches):
+            start_idx = batch_num * batch_size
+            end_idx = min(start_idx + batch_size, len(entries))
+            batch = entries[start_idx:end_idx]
+            
+            console.print(f"[dim]Batch {batch_num + 1}/{total_batches} ({len(batch)} posts)[/dim]")
+            
+            from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeElapsedColumn
+            
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+                TextColumn("({task.completed}/{task.total})"),
+                TimeElapsedColumn(),
+                console=console
+            ) as progress:
+                # Tech Stack (NER - efficient in batch)
+                task = progress.add_task("  Tech Stack", total=len(batch))
+                for entry in batch:
+                    entry['tech_stack'] = extract_tech_stack(entry['content'], ml_processor.ner_pipeline)
+                    stats['tech_count'] += len(entry['tech_stack'])
+                    progress.update(task, advance=1)
+                
+                # Patterns (NER + embeddings)
+                task = progress.add_task("  Patterns  ", total=len(batch))
+                for entry in batch:
+                    entry['patterns'] = extract_patterns(entry['content'], ml_processor.ner_pipeline, ml_processor.embedder)
+                    stats['patterns_count'] += len(entry['patterns'])
+                    progress.update(task, advance=1)
+                
+                # Solutions (embeddings)
+                task = progress.add_task("  Solutions ", total=len(batch))
+                for entry in batch:
+                    entry['solutions'] = extract_solutions(entry['content'], entry.get('tech_stack', []), ml_processor.embedder)
+                    stats['solutions_count'] += len(entry['solutions'])
+                    progress.update(task, advance=1)
+                
+                # Problems (Q&A)
+                task = progress.add_task("  Problems  ", total=len(batch))
+                for entry in batch:
+                    entry['problem'] = extract_problem(entry['content'], ml_processor.qa_pipeline)
+                    if entry['problem']:
+                        stats['problems_count'] += 1
+                    progress.update(task, advance=1)
+                
+                # Approaches (Q&A)
+                task = progress.add_task("  Approaches", total=len(batch))
+                for entry in batch:
+                    entry['approach'] = extract_approach(entry['content'], ml_processor.qa_pipeline)
+                    if entry['approach']:
+                        stats['approaches_count'] += 1
+                    progress.update(task, advance=1)
+            
+            # Save batch to database
+            console.print(f"[dim]  💾 Saving batch {batch_num + 1}...[/dim]")
+            for entry in batch:
+                ml_data = {
+                    'layers': entry.get('layers', []),
+                    'tech_stack': entry.get('tech_stack', []),
+                    'patterns': entry.get('patterns', []),
+                    'solutions': entry.get('solutions', []),
+                    'problem': entry.get('problem'),
+                    'approach': entry.get('approach')
+                }
+                db.update_ml_discovery(entry['id'], ml_data)
+            
+            # Clear GPU cache between batches
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            
+            console.print()
+        
+        # Print final statistics
+        console.print("[green]✅ ML Processing Complete![/green]")
+        console.print(f"[dim]  • Tech Stack: {stats['tech_count']} items[/dim]")
+        console.print(f"[dim]  • Patterns: {stats['patterns_count']} items[/dim]")
+        console.print(f"[dim]  • Solutions: {stats['solutions_count']} items[/dim]")
+        console.print(f"[dim]  • Problems: {stats['problems_count']} posts[/dim]")
+        console.print(f"[dim]  • Approaches: {stats['approaches_count']} posts[/dim]")
+        console.print()
+        
+    except Exception as e:
+        console.print(f"[red]❌ ML Discovery failed: {e}[/red]")
         import traceback
         traceback.print_exc()
         raise
+        console.print()
+        
+    except Exception as e:
+        console.print(f"[red]❌ ML Discovery failed: {e}[/red]")
+        import traceback
+        traceback.print_exc()
+        raise
+
+
+def _parse_json_field(field: Any) -> Any:
+    """Parse JSON field from database.
+    
+    Args:
+        field: Field value (can be string or already parsed)
+        
+    Returns:
+        Parsed object or None if parsing fails
+    """
+    if field is None:
+        return None
+    
+    if isinstance(field, str):
+        try:
+            return json.loads(field)
+        except Exception:
+            return None
+    
+    return field
+
+
+def _convert_posts_to_entries(posts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Convert database posts to timeline entry format.
+    
+    Args:
+        posts: List of posts from database with ML data
+        
+    Returns:
+        List of entries formatted for timeline export
+    """
+    entries = []
+    for post in posts:
+        date = _parse_post_date(post.get('published_at'))
+        
+        entry = {
+            'id': post['id'],
+            'title': post.get('title', 'Untitled'),
+            'date': date.isoformat() if date else None,
+            'url': post.get('url'),
+            'author': post.get('author', 'Unknown'),
+            'reading_time': post.get('reading_time', 0),
+            'content': post.get('content_markdown', ''),
+            'is_technical': post.get('is_technical', False),
+            'technical_score': post.get('technical_score', 0.0),
+            'code_blocks': post.get('code_blocks', 0),
+            # ML data
+            'layers': _parse_json_field(post.get('ml_layers')),
+            'tech_stack': _parse_json_field(post.get('tech_stack')),
+            'patterns': _parse_json_field(post.get('patterns')),
+            'solutions': _parse_json_field(post.get('solutions')),
+            'problem': post.get('problem'),
+            'approach': post.get('approach'),
+        }
+        entries.append(entry)
+    
+    return entries
 
 
 def _save_timeline(
     console: Console,
     entries: List[Dict[str, Any]],
     source: str,
-    posts: List[Dict[str, Any]]
+    posts: List[Dict[str, Any]],
+    technical_only: bool = False
 ) -> None:
     """Save timeline to JSON and Markdown files.
     
     Args:
         console: Rich console for output
-        entries: List of processed entries
+        entries: List of processed entries (can be DB posts or prepared entries)
         source: Source name
         posts: Original posts from database
+        technical_only: Export only technical posts
         
     Returns:
         None
     """
+    # Convert DB posts to entries if needed (check if entries have 'date' field)
+    if entries and 'date' not in entries[0]:
+        entries = _convert_posts_to_entries(entries)
+    
+    # Filter technical posts if requested
+    if technical_only:
+        entries = [e for e in entries if e.get('is_technical', False)]
+        console.print(f"[dim]ℹ️  Exporting only {len(entries)} technical posts[/dim]")
+    
     # Prepare clean entries (remove large content field)
     clean_entries = _prepare_clean_entries(entries)
     

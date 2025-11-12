@@ -514,3 +514,164 @@ class MLProcessor:
                 torch.cuda.empty_cache()
         except Exception:
             pass
+    
+    def process_posts_optimized(
+        self,
+        all_entries: List[Dict[str, Any]],
+        save_callback: Optional[Callable] = None,
+        batch_size: int = 50
+    ) -> Dict[str, Any]:
+        """
+        Process posts with HYBRID approach:
+        - Clustering GLOBAL (TF-IDF needs all docs)
+        - Extractions in BATCHES (memory efficient)
+        
+        Args:
+            all_entries: ALL posts to process
+            save_callback: Function to save individual post ML data
+            batch_size: Posts per batch for extraction (default: 50)
+            
+        Returns:
+            Dictionary with processing statistics
+        """
+        if not all_entries:
+            self.console.print("[yellow]No entries to process[/yellow]")
+            return {}
+        
+        total_start = time.time()
+        
+        # PHASE 1: GLOBAL CLUSTERING (needs all posts together)
+        self.console.print(f"\n[bold cyan]Phase 1: Global Clustering ({len(all_entries)} posts)[/bold cyan]")
+        texts = [e.get('content', '') for e in all_entries]
+        self.cluster_topics(all_entries, texts)
+        
+        # PHASE 2: BATCH PROCESSING (efficient extraction)
+        self.console.print(f"\n[bold cyan]Phase 2: Batch ML Extraction (batches of {batch_size})[/bold cyan]")
+        
+        total_stats = {
+            'tech_stack': 0,
+            'patterns': 0,
+            'solutions': 0,
+            'problems': 0,
+            'approaches': 0
+        }
+        
+        num_batches = (len(all_entries) + batch_size - 1) // batch_size
+        
+        for batch_idx in range(num_batches):
+            start_idx = batch_idx * batch_size
+            end_idx = min(start_idx + batch_size, len(all_entries))
+            batch = all_entries[start_idx:end_idx]
+            
+            self.console.print(
+                f"\n[cyan]Batch {batch_idx + 1}/{num_batches}: "
+                f"Posts {start_idx + 1}-{end_idx}[/cyan]"
+            )
+            
+            # Extract features for this batch
+            batch_stats = self._process_batch_extractions(batch)
+            
+            # Accumulate stats
+            for key in total_stats:
+                total_stats[key] += batch_stats.get(key, 0)
+            
+            # Save batch to database
+            if save_callback:
+                self._save_batch_results(batch, save_callback)
+            
+            # Clear GPU cache between batches
+            self._clear_gpu_cache()
+        
+        total_time = time.time() - total_start
+        
+        # Print final summary
+        self.console.print(f"\n[bold green]✅ Completed in {total_time:.1f}s[/bold green]")
+        self.console.print(f"[dim]Average: {total_time/len(all_entries):.2f}s per post[/dim]\n")
+        
+        return total_stats
+    
+    def _process_batch_extractions(self, batch: List[Dict[str, Any]]) -> Dict[str, int]:
+        """Extract all features for a batch of posts"""
+        from discover_enriched import (
+            extract_tech_stack,
+            extract_patterns,
+            extract_solutions,
+            extract_problem,
+            extract_approach
+        )
+        
+        stats = {
+            'tech_stack': 0,
+            'patterns': 0,
+            'solutions': 0,
+            'problems': 0,
+            'approaches': 0
+        }
+        
+        # Step 2: Tech Stack (NER - batch friendly)
+        self.console.print("[cyan]  → Tech Stack (NER)...[/cyan]")
+        for entry in batch:
+            tech = extract_tech_stack(entry.get('content', ''), self.ner_pipeline)
+            entry['tech_stack'] = tech
+            if tech:
+                stats['tech_stack'] += 1
+        
+        # Step 3: Patterns (NER - batch friendly)
+        self.console.print("[cyan]  → Patterns...[/cyan]")
+        for entry in batch:
+            patterns = extract_patterns(entry.get('content', ''), self.ner_pipeline, self.embedder)
+            entry['patterns'] = patterns
+            if patterns:
+                stats['patterns'] += 1
+        
+        # Step 4: Solutions (embeddings - controlled batching)
+        self.console.print("[cyan]  → Solutions...[/cyan]")
+        for entry in batch:
+            tech_stack = entry.get('tech_stack', [])
+            solutions = extract_solutions(
+                entry.get('content', ''),
+                tech_stack,
+                self.embedder
+            )
+            entry['solutions'] = solutions
+            if solutions:
+                stats['solutions'] += 1
+        
+        # Step 5: Problems (Q&A - sequential but fast)
+        self.console.print("[cyan]  → Problems...[/cyan]")
+        for entry in batch:
+            problem = extract_problem(entry.get('content', ''), self.qa_pipeline)
+            entry['problem'] = problem
+            if problem:
+                stats['problems'] += 1
+        
+        # Step 6: Approaches (Q&A - sequential but fast)
+        self.console.print("[cyan]  → Approaches...[/cyan]")
+        for entry in batch:
+            approach = extract_approach(entry.get('content', ''), self.qa_pipeline)
+            entry['approach'] = approach
+            if approach:
+                stats['approaches'] += 1
+        
+        return stats
+    
+    def _save_batch_results(
+        self,
+        batch: List[Dict[str, Any]],
+        save_callback: Callable
+    ) -> None:
+        """Save batch results to database"""
+        self.console.print("[cyan]  → Saving batch...[/cyan]")
+        
+        for entry in batch:
+            ml_data = {
+                'layers': entry.get('layers', []),
+                'tech_stack': entry.get('tech_stack', []),
+                'patterns': entry.get('patterns', []),
+                'solutions': entry.get('solutions', []),
+                'problem': entry.get('problem'),
+                'approach': entry.get('approach'),
+            }
+            save_callback(entry['id'], ml_data)
+        
+        self.console.print(f"[green]  ✓ Saved {len(batch)} posts[/green]")

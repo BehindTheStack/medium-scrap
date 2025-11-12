@@ -654,6 +654,33 @@ class PipelineDB:
             cursor.execute(query, params)
             return [dict(row) for row in cursor.fetchall()]
     
+    def get_posts_needing_ml(self, source: Optional[str] = None,
+                            limit: Optional[int] = None) -> List[Dict]:
+        """Get posts that need ML processing (have content but not ML classified)"""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            
+            query = """
+                SELECT * FROM posts 
+                WHERE content_markdown IS NOT NULL
+                AND LENGTH(content_markdown) > 100
+                AND (ml_classified IS NULL OR ml_classified = 0)
+            """
+            params = []
+            
+            if source:
+                query += " AND source = ?"
+                params.append(source)
+            
+            query += " ORDER BY published_at DESC"
+            
+            if limit:
+                query += " LIMIT ?"
+                params.append(limit)
+            
+            cursor.execute(query, params)
+            return [dict(row) for row in cursor.fetchall()]
+    
     def search_content(self, query: str, limit: int = 50) -> List[Dict]:
         """
         Simple full-text search in post content

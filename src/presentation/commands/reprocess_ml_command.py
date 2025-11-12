@@ -53,43 +53,66 @@ SAVE_PROGRESS_INTERVAL = 10
     is_flag=True,
     help='Force reprocess even if already has ML data'
 )
+@click.option(
+    '--batch-size',
+    '-b',
+    type=int,
+    default=50,
+    help='Batch size for optimized processing (default: 50)'
+)
+@click.option(
+    '--technical-only',
+    is_flag=True,
+    help='Process only technical posts (is_technical=True)'
+)
+@click.option(
+    '--legacy',
+    is_flag=True,
+    help='Use legacy processing (all at once, slower)'
+)
 def reprocess_ml_command(
     source: Optional[str],
     all_sources: bool,
     limit: Optional[int],
-    force: bool
+    force: bool,
+    batch_size: int,
+    technical_only: bool,
+    legacy: bool
 ) -> None:
-    """Reprocess posts with NEW ML discovery approach.
+    """Reprocess posts with OPTIMIZED ML discovery approach.
     
-    Reprocesses existing posts FROM DATABASE that have content_markdown 
-    with the new ML approach (NO hardcoded keywords).
+    Uses hybrid approach for efficiency:
+    - Global clustering (TF-IDF needs all docs)
+    - Batch extractions (memory efficient)
     
     Args:
         source: Specific source name to reprocess
         all_sources: Whether to process all available sources
         limit: Maximum number of posts per source to process
         force: Force reprocess even if already has ML data
+        batch_size: Posts per batch for extraction (default: 50)
+        legacy: Use old processing method (all at once)
         
     Returns:
         None
         
     Examples:
-        # Reprocess one source
+        # Reprocess one source (optimized)
         uv run python main.py reprocess-ml --source netflix
         
-        # Test with limit
-        uv run python main.py reprocess-ml --source netflix --limit 50
+        # With custom batch size
+        uv run python main.py reprocess-ml --source netflix --batch-size 100
         
-        # Reprocess ALL sources
-        uv run python main.py reprocess-ml --all
-        
-        # Force reprocess everything (even if already has ML)
+        # Force reprocess everything
         uv run python main.py reprocess-ml --all --force
+        
+        # Use legacy processing
+        uv run python main.py reprocess-ml --source netflix --legacy
     """
     console = Console()
     db = PipelineDB()
     
-    _print_header(console)
+    _print_header(console, optimized=not legacy)
     
     # Get available sources from database
     available_sources = _get_available_sources(db, console)
@@ -119,7 +142,10 @@ def reprocess_ml_command(
         ml_processor,
         sources_to_process,
         force,
-        limit
+        limit,
+        technical_only,
+        use_optimized=not legacy,
+        batch_size=batch_size
     )
     
     # Final summary
@@ -131,22 +157,29 @@ def reprocess_ml_command(
     )
 
 
-def _print_header(console: Console) -> None:
-    """Print command header with description.
-    
-    Args:
-        console: Rich console for output
-        
-    Returns:
-        None
-    """
+def _print_header(console: Console, optimized: bool = True) -> None:
+    """Print beautiful command header"""
     console.print()
-    console.print("[bold cyan]🔄 ML Reprocessing - New Approach[/bold cyan]")
+    console.print("╔" + "═" * 78 + "╗", style="bold cyan")
+    console.print("║" + " " * 78 + "║", style="bold cyan")
+    
+    if optimized:
+        title = "🚀 REPROCESS ML - Optimized Discovery (Hybrid Approach)"
+        subtitle = "  Global Clustering + Batch Extraction"
+    else:
+        title = "🔬 REPROCESS ML - Legacy Discovery (Full Processing)"
+        subtitle = "  All posts processed together"
+    
     console.print(
-        "[dim]Using: Clustering + NER + Q&A "
-        "(NO hardcoded keywords!)[/dim]"
+        "║" + f"  {title}".center(78) + "║",
+        style="bold cyan"
     )
-    console.print("[dim]Source: Database posts with content_markdown[/dim]")
+    console.print(
+        "║" + subtitle.center(78) + "║",
+        style="dim cyan"
+    )
+    console.print("║" + " " * 78 + "║", style="bold cyan")
+    console.print("╚" + "═" * 78 + "╝", style="bold cyan")
     console.print()
 
 
@@ -234,7 +267,10 @@ def _process_all_sources(
     ml_processor: MLProcessor,
     sources: List[str],
     force: bool,
-    limit: Optional[int]
+    limit: Optional[int],
+    technical_only: bool,
+    use_optimized: bool = True,
+    batch_size: int = 50
 ) -> tuple[int, int]:
     """Process all specified sources with ML.
     
@@ -244,6 +280,10 @@ def _process_all_sources(
         ml_processor: ML processor instance
         sources: List of source names to process
         force: Whether to force reprocessing
+        limit: Maximum posts per source
+        technical_only: Process only technical posts
+        use_optimized: Whether to use optimized batch processing
+        batch_size: Posts per batch (for optimized mode)
         limit: Optional limit on posts per source
         
     Returns:
@@ -256,7 +296,7 @@ def _process_all_sources(
         _print_source_header(console, idx, len(sources), src)
         
         # Get posts to process
-        posts = _get_posts_to_process(db, src, force, limit)
+        posts = _get_posts_to_process(db, src, force, limit, technical_only)
         
         if not posts:
             console.print(
@@ -286,7 +326,9 @@ def _process_all_sources(
             db,
             ml_processor,
             src,
-            entries
+            entries,
+            use_optimized,
+            batch_size
         )
         
         total_reprocessed += reprocessed
@@ -324,7 +366,8 @@ def _get_posts_to_process(
     db: PipelineDB,
     source: str,
     force: bool,
-    limit: Optional[int]
+    limit: Optional[int],
+    technical_only: bool = False
 ) -> List[Dict[str, Any]]:
     """Get posts that need ML processing from database.
     
@@ -333,6 +376,7 @@ def _get_posts_to_process(
         source: Source name to query
         force: Whether to reprocess all posts
         limit: Optional limit on number of posts
+        technical_only: Filter only technical posts
         
     Returns:
         List of post dictionaries from database
@@ -345,9 +389,14 @@ def _get_posts_to_process(
             query = """
                 SELECT * FROM posts 
                 WHERE source = ? AND content_markdown IS NOT NULL
-                ORDER BY published_at DESC
             """
             params: List[Any] = [source]
+            
+            # Filter technical posts if requested
+            if technical_only:
+                query += " AND is_technical = 1"
+            
+            query += " ORDER BY published_at DESC"
         else:
             # Only posts without ML data
             query = """
@@ -356,9 +405,14 @@ def _get_posts_to_process(
                 AND content_markdown IS NOT NULL
                 AND (tech_stack IS NULL OR patterns IS NULL 
                      OR ml_classified = 0)
-                ORDER BY published_at DESC
             """
             params = [source]
+            
+            # Filter technical posts if requested
+            if technical_only:
+                query += " AND is_technical = 1"
+            
+            query += " ORDER BY published_at DESC"
         
         if limit:
             query += " LIMIT ?"
@@ -427,7 +481,9 @@ def _process_source_with_ml(
     db: PipelineDB,
     ml_processor: MLProcessor,
     source: str,
-    entries: List[Dict[str, Any]]
+    entries: List[Dict[str, Any]],
+    use_optimized: bool = True,
+    batch_size: int = 50
 ) -> tuple[int, int]:
     """Process single source with ML extraction.
     
@@ -437,13 +493,16 @@ def _process_source_with_ml(
         ml_processor: ML processor instance
         source: Source name being processed
         entries: List of entries to process
+        use_optimized: Whether to use optimized batch processing
+        batch_size: Posts per batch (for optimized mode)
         
     Returns:
         Tuple of (reprocessed_count, failed_count)
     """
+    mode = "Optimized (Hybrid)" if use_optimized else "Legacy (Full)"
     console.print(
         f"[cyan]🤖 Running ML discovery on "
-        f"{len(entries)} posts...[/cyan]"
+        f"{len(entries)} posts ({mode})...[/cyan]"
     )
     console.print()
     
@@ -451,11 +510,18 @@ def _process_source_with_ml(
         # Create incremental save callback
         save_callback = _create_save_callback(console, db, len(entries))
         
-        # Run ML processing with incremental save
-        ml_processor.process_posts(
-            entries,
-            save_callback=save_callback
-        )
+        # Run ML processing with appropriate method
+        if use_optimized:
+            ml_processor.process_posts_optimized(
+                entries,
+                save_callback=save_callback,
+                batch_size=batch_size
+            )
+        else:
+            ml_processor.process_posts(
+                entries,
+                save_callback=save_callback
+            )
         
         saved_count = save_callback.keywords['count']
         console.print(
