@@ -31,10 +31,11 @@ class PostId:
     value: str
     
     def __post_init__(self):
-        if not self.value or len(self.value) != 12:
-            raise ValueError("Post ID must be exactly 12 characters")
-        if not self.value.isalnum():
-            raise ValueError("Post ID must be alphanumeric")
+        # Basic validation - trust the Medium API for format
+        if not self.value:
+            raise ValueError("Post ID cannot be empty")
+        if not self.value.strip():
+            raise ValueError("Post ID cannot be whitespace")
 
 
 @dataclass(frozen=True)

@@ -24,11 +24,16 @@ class MediumApiAdapter(PostRepository):
     def __init__(self, transport: Optional[HTTPTransport] = None):
         self._base_headers = {
             "accept": "*/*",
+            "accept-encoding": "gzip, deflate, br, zstd",
+            "accept-language": "en-US,en;q=0.9",
             "content-type": "application/json",
-            "user-agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36",
+            "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
             "apollographql-client-name": "lite",
-            "apollographql-client-version": "main-20250822-202538-95c3fbb66d",
-            "medium-frontend-app": "lite/main-20250822-202538-95c3fbb66d",
+            "apollographql-client-version": "main-20251110-155029-e7a0736aac",
+            "medium-frontend-app": "lite/main-20251110-155029-e7a0736aac",
+            "sec-ch-ua": '"Chromium";v="131", "Google Chrome";v="131", "Not_A Brand";v="99"',
+            "sec-ch-ua-mobile": "?0",
+            "sec-ch-ua-platform": '"Windows"',
             "sec-fetch-dest": "empty",
             "sec-fetch-mode": "cors",
             "sec-fetch-site": "same-origin"
@@ -38,6 +43,10 @@ class MediumApiAdapter(PostRepository):
 
     def _safe_http_post(self, url: str, headers: Dict[str, str], payload: Dict[str, Any]):
         """Delegate POST to the injected transport for testable HTTP calls."""
+        # Add graphql-operation header if operationName is present in payload
+        if "operationName" in payload:
+            headers = headers.copy()
+            headers["graphql-operation"] = payload["operationName"]
         return self._transport.post(url, headers=headers, json=payload)
     
     def get_posts_by_ids(self, post_ids: List[PostId], config: PublicationConfig) -> List[Post]:
@@ -61,29 +70,48 @@ class MediumApiAdapter(PostRepository):
         """Discover post IDs automatically from publication"""
         discovered_ids = []
         
-        try:
-            # Strategy 1: Publication All Posts Query (NEW)
-            discovered_ids = self._discover_via_publication_all(config, limit)
-            if discovered_ids:
-                return discovered_ids
-        except Exception:
-            pass
-        
-        try:
-            # Strategy 2: GraphQL Publication Query
-            discovered_ids = self._discover_via_graphql(config, limit)
-            if discovered_ids:
-                return discovered_ids
-        except Exception:
-            pass
-        
-        try:
-            # Strategy 3: HTML Scraping
-            discovered_ids = self._discover_via_html_scraping(config, limit)
-            if discovered_ids:
-                return discovered_ids
-        except Exception:
-            pass
+        # For usernames (starts with @), skip publication query and use GraphQL directly
+        if config.id.value.startswith('@'):
+            try:
+                # Strategy 1: GraphQL User Query (for usernames)
+                discovered_ids = self._discover_via_graphql(config, limit)
+                if discovered_ids:
+                    return discovered_ids
+            except Exception:
+                pass
+            
+            try:
+                # Strategy 2: HTML Scraping fallback
+                discovered_ids = self._discover_via_html_scraping(config, limit)
+                if discovered_ids:
+                    return discovered_ids
+            except Exception:
+                pass
+        else:
+            # For publications, try publication query first
+            try:
+                # Strategy 1: Publication All Posts Query (NEW)
+                discovered_ids = self._discover_via_publication_all(config, limit)
+                if discovered_ids:
+                    return discovered_ids
+            except Exception:
+                pass
+            
+            try:
+                # Strategy 2: GraphQL Publication Query
+                discovered_ids = self._discover_via_graphql(config, limit)
+                if discovered_ids:
+                    return discovered_ids
+            except Exception:
+                pass
+            
+            try:
+                # Strategy 3: HTML Scraping
+                discovered_ids = self._discover_via_html_scraping(config, limit)
+                if discovered_ids:
+                    return discovered_ids
+            except Exception:
+                pass
         
         return discovered_ids
     
@@ -125,6 +153,9 @@ class MediumApiAdapter(PostRepository):
         # If no limit, set a high number to continue until no more pages
         max_to_collect = limit if limit is not None else 999999  # Use a large number instead of infinity
         
+        # Rate limiting - wait before making request
+        # time.sleep(1.0)  # 1 second delay to avoid 429 errors
+        
         while collected < max_to_collect:
             remaining = max_to_collect - collected if limit is not None else page_size
             current_page_size = min(page_size, remaining if limit is not None else page_size)
@@ -134,7 +165,13 @@ class MediumApiAdapter(PostRepository):
             try:
                 response = self._safe_http_post(config.graphql_url, headers, query)
 
-                if response.status_code != 200:
+                if response.status_code == 429:
+                    # Rate limited - wait and retry once
+                    time.sleep(2.0)
+                    response = self._safe_http_post(config.graphql_url, headers, query)
+                    if response.status_code != 200:
+                        break
+                elif response.status_code != 200:
                     break
 
                 data = response.json()
@@ -156,7 +193,14 @@ class MediumApiAdapter(PostRepository):
                         break
 
                     # Collect post IDs from this page
-                    page_ids = [PostId(post["id"]) for post in posts_list]
+                    page_ids = []
+                    for post in posts_list:
+                        try:
+                            page_ids.append(PostId(post["id"]))
+                        except Exception:
+                            # Skip invalid post IDs
+                            continue
+                    
                     all_post_ids.extend(page_ids)
                     collected += len(page_ids)
 
@@ -575,19 +619,41 @@ class MediumApiAdapter(PostRepository):
 
         Uses a best-effort approach: for medium-hosted posts we use the short 'p' URL; for custom domains we
         try the domain + slug path.
+        
+        Includes retry logic for rate limiting (429).
         """
-        try:
-            if config.is_custom_domain:
-                url = f"https://{config.domain}/{post.slug}"
-            else:
-                # Use the short 'p' URL which reliably redirects to the canonical post on medium
-                url = f"https://medium.com/p/{post.id.value}"
+        import time
+        
+        max_retries = 5
+        base_delay = 3  # Start with 3 seconds
+        
+        for attempt in range(max_retries):
+            try:
+                if config.is_custom_domain:
+                    url = f"https://{config.domain}/{post.slug}"
+                else:
+                    # Use the short 'p' URL which reliably redirects to the canonical post on medium
+                    url = f"https://medium.com/p/{post.id.value}"
 
-            response = self._transport.get(url, headers={"User-Agent": self._base_headers.get("user-agent", "")}, follow_redirects=True)
+                response = self._transport.get(url, headers={"User-Agent": self._base_headers.get("user-agent", "")}, follow_redirects=True)
 
-            if response.status_code == 200:
-                return response.text
-        except Exception:
-            return None
-
+                if response.status_code == 200:
+                    return response.text
+                elif response.status_code == 429:
+                    # Rate limited - retry with exponential backoff (silent to not interfere with Rich Progress)
+                    if attempt < max_retries - 1:
+                        wait_time = base_delay * (2 ** attempt)  # Exponential: 3, 6, 12, 24, 48s
+                        time.sleep(wait_time)
+                        continue
+                    else:
+                        # Final failure - silent
+                        return None
+                else:
+                    # Other HTTP errors - silent
+                    return None
+                    
+            except Exception as e:
+                # Silent to not interfere with progress bar
+                return None
+        
         return None

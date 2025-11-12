@@ -12,15 +12,15 @@ sources:
     auto_discover: true
     custom_domain: false
   tinder:
-    type: publication
-    name: tinder
-    description: Tinder Engineering - Dating app technology
+    type: username
+    name: '@TinderEng'
+    description: Tinder Engineering - Dating app technology (via username)
     auto_discover: true
     custom_domain: false
   skyscanner:
     type: username
     name: '@SkyscannerEng'
-    description: Skyscanner Engineering - Travel tech insights
+    description: Skyscanner Engineering - Travel tech insights (via username)
     auto_discover: true
     custom_domain: false
   airbnb:
@@ -65,97 +65,8 @@ sources:
     description: Deezer Engineering - Music streaming technology
     auto_discover: true
     custom_domain: true
-  engineering:
-    type: publication
-    name: freecodecamp
-    description: FreeCodeCamp - Programming tutorials and tips
-    auto_discover: true
-    custom_domain: false
-  uber:
-    type: publication
-    name: uber-engineering
-    description: Uber Engineering Blog
-    auto_discover: true
-    custom_domain: false
-  startup:
-    type: publication
-    name: hackernoon
-    description: Hacker Noon - Tech stories and tutorials
-    auto_discover: true
-    custom_domain: false
-  medium-staff:
-    type: publication
-    name: medium-staff
-    description: Official Medium Staff picks
-    auto_discover: true
-    custom_domain: false
-  towards-data-science:
-    type: publication
-    name: towards-data-science
-    description: Towards Data Science - ML, AI, and Data insights
-    auto_discover: true
-    custom_domain: false
-  ux-design:
-    type: publication
-    name: ux-design
-    description: UX Design - User experience articles
-    auto_discover: true
-    custom_domain: false
-  tinder-eng:
-    type: username
-    name: '@TinderEng'
-    description: Tinder Engineering Team
-    auto_discover: true
-    custom_domain: false
-  pinterest:
-    type: publication
-    name: pinterest
-    description: Pinterest Engineering
-    auto_discover: true
-    custom_domain: false
 defaults:
   limit: 50
   skip_session: true
   format: json
   output_dir: outputs
-bulk_collections:
-  tech_giants:
-    description: All major tech company blogs - baseado no seu histórico
-    sources:
-    - netflix
-    - airbnb
-    - uber
-    - lyft
-    - wise
-    - tinder
-    - skyscanner
-  custom_domains:
-    description: All custom domain publications you tested
-    sources:
-    - kickstarter
-    - lyft
-    - medium
-    - nytimes
-    - olx
-    - deezer
-  fintech_and_commerce:
-    description: Financial technology and e-commerce
-    sources:
-    - wise
-    - olx
-    - tinder
-  media_and_content:
-    description: Media, content and publishing platforms
-    sources:
-    - medium
-    - nytimes
-    - deezer
-  data_science:
-    description: Data Science and AI focused content
-    sources:
-    - towards-data-science
-  startup_ecosystem:
-    description: Startup and business content
-    sources:
-    - startup
-    - medium-staff

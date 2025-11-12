@@ -1,0 +1,8 @@
+scikit-learn>=1.2
+pandas
+joblib
+numpy
+rich
+tqdm
+sentence-transformers>=2.2.0
+torch

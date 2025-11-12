@@ -129,8 +129,26 @@ def persist_markdown_and_metadata(post, markdown: str, assets: List[Dict], outpu
 
     cleaned_md = _clean_markdown(markdown)
 
-    # Save markdown
+    # Create structured markdown with YAML frontmatter for better parsing
+    frontmatter = f"""---
+id: {post_key}
+title: {getattr(post, 'title', 'Untitled').replace(':', ' -')}
+author: {getattr(getattr(post, 'author', None), 'name', 'Unknown')}
+published_at: {getattr(post, 'published_at', '')}
+url: {getattr(post, 'url', '')}
+tags: {getattr(post, 'tags', [])}
+reading_time: {getattr(post, 'reading_time', 0)} min
+claps: {getattr(post, 'claps', 0)}
+is_technical: {classifier.get('is_technical', False) if classifier else False}
+technical_score: {classifier.get('score', 0) if classifier else 0}
+code_blocks: {len(code_blocks) if code_blocks else 0}
+---
+
+"""
+
+    # Save markdown with frontmatter
     with open(md_path, 'w', encoding='utf-8') as f:
+        f.write(frontmatter)
         f.write(cleaned_md)
 
     # Download assets into assets/<base_name>/
