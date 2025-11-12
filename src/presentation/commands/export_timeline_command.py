@@ -512,7 +512,7 @@ def _build_entries_from_posts(
         
         # Parse ML data
         ml_data = {
-            'layers': _parse_json_field(post.get('layers')) or [],
+            'layers': _parse_json_field(post.get('ml_layers')) or [],
             'tech_stack': _parse_json_field(post.get('tech_stack')) or [],
             'patterns': _parse_json_field(post.get('patterns')) or [],
             'solutions': _parse_json_field(post.get('solutions')) or [],
