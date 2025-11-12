@@ -22,6 +22,18 @@ from sklearn.preprocessing import MultiLabelBinarizer
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report, hamming_loss
 from tqdm import tqdm
+import sys
+from pathlib import Path as _Path
+
+# Try to import centralized cleaner
+try:
+    src_root = _Path(__file__).parent.parent
+    if str(src_root) not in sys.path:
+        sys.path.insert(0, str(src_root))
+    from presentation.helpers.text_cleaner import clean_markdown
+except Exception:
+    def clean_markdown(x):
+        return x or ""
 
 warnings.filterwarnings('ignore')
 
@@ -56,8 +68,8 @@ def extract_text(entry: dict) -> str:
             md = Path(p)
             if md.exists():
                 txt = md.read_text(encoding="utf-8")
-                # Limit to first 8000 chars to avoid memory issues
-                parts.append(txt[:8000])
+                # Keep full cleaned content (no hard truncation). Caller can decide to chunk.
+                parts.append(clean_markdown(txt))
         except Exception:
             pass
     return "\n".join(parts)

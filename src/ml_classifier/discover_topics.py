@@ -25,6 +25,18 @@ from sentence_transformers import SentenceTransformer
 from sklearn.cluster import KMeans
 from sklearn.feature_extraction.text import TfidfVectorizer
 from tqdm import tqdm
+import sys
+from pathlib import Path as _Path
+
+# Try to import centralized cleaner
+try:
+    src_root = _Path(__file__).parent.parent
+    if str(src_root) not in sys.path:
+        sys.path.insert(0, str(src_root))
+    from presentation.helpers.text_cleaner import clean_markdown
+except Exception:
+    def clean_markdown(x):
+        return x or ""
 
 warnings.filterwarnings('ignore')
 
@@ -56,8 +68,8 @@ def extract_text(entry: dict) -> str:
             md = Path(p)
             if md.exists():
                 txt = md.read_text(encoding="utf-8")
-                # Take more content for better topic discovery
-                parts.append(txt[:15000])
+                # Keep full cleaned content (no hard truncation)
+                parts.append(clean_markdown(txt))
         except Exception:
             pass
     return "\n".join(parts)

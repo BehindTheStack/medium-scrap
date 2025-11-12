@@ -581,6 +581,65 @@ def _generate_markdown(timeline: dict, md_file: Path):
     md_file.write_text('\n'.join(md_lines), encoding='utf-8')
 
 
+def _generate_combined_markdown(timeline: dict, md_file: Path):
+    """Generate Markdown summary for combined timeline"""
+    md_lines = [
+        f"# All Sources - Engineering Timeline\n",
+        f"**Version**: {timeline['version']} (ML Discovery Edition)",
+        f"**Type**: Combined ({timeline['total_sources']} sources)",
+        f"**Exported**: {timeline['exported_at']}",
+        f"**Total Posts**: {timeline['stats']['total_posts']}",
+        f"**Technical Posts**: {timeline['stats']['technical_posts']}",
+        f"**With ML Data**: {timeline['stats']['posts_with_ml']}\n",
+        "---\n",
+        "## 📚 Sources Included\n"
+    ]
+    
+    for src, info in sorted(timeline['sources'].items(), key=lambda x: x[1]['count'], reverse=True):
+        md_lines.append(f"- **{info['publication']}** ({src}): {info['count']} posts")
+    
+    md_lines.extend([
+        "\n---\n",
+        "## 📊 ML Discovery Statistics\n",
+        f"- **Topics Discovered**: {timeline['stats']['ml_discovery']['n_topics']}",
+        f"- **Technologies Mentioned**: {timeline['stats']['ml_discovery']['total_tech_mentions']} ({timeline['stats']['ml_discovery']['unique_technologies']} unique)",
+        f"- **Patterns Found**: {timeline['stats']['ml_discovery']['total_patterns']} ({timeline['stats']['ml_discovery']['unique_patterns']} unique)",
+        f"- **Posts with Solutions**: {timeline['stats']['ml_discovery']['posts_with_solutions']}",
+        f"- **Posts with Problem**: {timeline['stats']['ml_discovery']['posts_with_problem']}",
+        f"- **Posts with Approach**: {timeline['stats']['ml_discovery']['posts_with_approach']}\n",
+        "---\n",
+        "## 🔧 Top Technologies (All Sources)\n"
+    ])
+    
+    for tech in timeline['stats']['top_technologies'][:20]:
+        md_lines.append(f"- **{tech['name']}**: {tech['count']} mentions")
+    
+    md_lines.append("\n---\n")
+    md_lines.append("## 🏗️ Top Patterns (All Sources)\n")
+    
+    for pattern in timeline['stats']['top_patterns'][:20]:
+        md_lines.append(f"- **{pattern['pattern']}**: {pattern['count']} occurrences")
+    
+    md_lines.append("\n---\n")
+    md_lines.append("## 📚 Posts by Architecture Layer\n")
+    
+    for layer, items in sorted(
+        timeline['per_layer'].items(),
+        key=lambda x: len(x[1]),
+        reverse=True
+    ):
+        md_lines.append(f"\n### {layer} ({len(items)} posts)\n")
+        for item in items[:20]:  # Show first 20
+            date_str = item['date'] or 'unknown'
+            src = item['source']
+            md_lines.append(f"- **{date_str}** [{src}] — [{item['title'][:70]}]({item['url'] or '#'})")
+        
+        if len(items) > 20:
+            md_lines.append(f"\n  _... and {len(items) - 20} more posts_\n")
+    
+    md_file.write_text('\n'.join(md_lines), encoding='utf-8')
+
+
 def _parse_json_field(field):
     """Parse JSON field from database (can be string or already parsed)"""
     if field is None:

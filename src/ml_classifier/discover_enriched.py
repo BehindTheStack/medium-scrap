@@ -7,16 +7,41 @@ Uses only HuggingFace models - no hardcoded keywords.
 """
 import argparse
 import json
+import os
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Dict, List, Any
 
 import joblib
 import numpy as np
+import torch
 from sklearn.cluster import KMeans
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sentence_transformers import SentenceTransformer
 from transformers import pipeline
+import sys
+from pathlib import Path as _Path
+
+# Ensure we can import the centralized text_cleaner from src/presentation/helpers
+try:
+    # Add src/ to sys.path so `presentation.helpers` is importable
+    src_root = _Path(__file__).parent.parent
+    if str(src_root) not in sys.path:
+        sys.path.insert(0, str(src_root))
+    from presentation.helpers.text_cleaner import clean_markdown, chunk_text
+except Exception:
+    # Fallback: define a minimal cleaner (shouldn't happen in normal runs)
+    def clean_markdown(text):
+        return text or ""
+
+    def chunk_text(text, max_chars=None, overlap=0):
+        return [text]
+
+# Set LD_LIBRARY_PATH for WSL CUDA support
+if os.path.exists('/usr/lib/wsl/lib'):
+    wsl_lib = '/usr/lib/wsl/lib'
+    if wsl_lib not in os.environ.get('LD_LIBRARY_PATH', ''):
+        os.environ['LD_LIBRARY_PATH'] = f"{wsl_lib}:{os.environ.get('LD_LIBRARY_PATH', '')}"
 
 # Cache directory for models
 CACHE_DIR = Path(__file__).parent / ".cache"
@@ -26,6 +51,32 @@ CACHE_DIR.mkdir(exist_ok=True)
 EMBEDDER_NAME = "all-MiniLM-L6-v2"
 NER_MODEL = "dslim/bert-base-NER"
 QA_MODEL = "deepset/roberta-base-squad2"  # For problem/approach extraction
+
+
+def get_device():
+    """
+    Auto-detect best available device: CUDA > MPS > CPU
+    
+    Returns:
+        tuple: (device_name, device_id_for_pipeline)
+            - device_name: 'cuda', 'mps', or 'cpu'
+            - device_id_for_pipeline: 0 for cuda, -1 for cpu/mps
+    """
+    if torch.cuda.is_available():
+        device_name = 'cuda'
+        device_id = 0
+        gpu_name = torch.cuda.get_device_name(0)
+        print(f"✓ Using GPU: {gpu_name}")
+    elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+        device_name = 'mps'
+        device_id = -1  # MPS works via model.to('mps'), not pipeline device arg
+        print("✓ Using Apple Silicon MPS")
+    else:
+        device_name = 'cpu'
+        device_id = -1
+        print("⚠ Using CPU (GPU not available - slower inference)")
+    
+    return device_name, device_id
 
 def extract_patterns(text: str, ner_pipeline, embedder) -> List[Dict[str, Any]]:
     """
@@ -42,37 +93,37 @@ def extract_patterns(text: str, ner_pipeline, embedder) -> List[Dict[str, Any]]:
     """
     if not text or len(text.strip()) < 20:
         return []
-    
-    # Use first 2000 chars
-    text_sample = text[:2000]
-    
+
+    # Clean the full text (do not truncate here)
+    text_sample = clean_markdown(text)
+
     try:
         # 1. Get technical entities from NER
         entities = ner_pipeline(text_sample)
         tech_entities = [
-            e['word'].replace('##', '').strip() 
-            for e in entities 
-            if e['entity_group'] in ['ORG', 'MISC'] and e['score'] > 0.80
+            e['word'].replace('##', '').strip()
+            for e in entities
+            if e.get('entity_group') in ['ORG', 'MISC'] and e.get('score', 0) > 0.80
         ]
-        
+
         # 2. Extract technical bigrams/trigrams
         import re
-        # Remove markdown, code blocks, URLs
+        # Clean additional artifacts and remove remaining URLs (clean_markdown already ran)
         clean_text = re.sub(r'```.*?```', '', text_sample, flags=re.DOTALL)
         clean_text = re.sub(r'http\S+', '', clean_text)
         clean_text = re.sub(r'[#*`\[\]()]', ' ', clean_text)
-        
+
         # Split into sentences
         sentences = [s.strip() for s in clean_text.split('.') if len(s.strip()) > 20]
-        
+
         # Extract n-grams that contain technical terms
         patterns_found = []
-        pattern_keywords = ['architecture', 'pattern', 'system', 'design', 'approach', 
+        pattern_keywords = ['architecture', 'pattern', 'system', 'design', 'approach',
                            'model', 'framework', 'platform', 'infrastructure', 'service']
-        
-        for sentence in sentences[:30]:  # First 30 sentences
+
+        for sentence in sentences[:30]:  # examine first 30 candidate sentences
             sentence_lower = sentence.lower()
-            
+
             # Check if sentence discusses patterns/architecture
             if any(kw in sentence_lower for kw in pattern_keywords):
                 # Extract potential pattern phrases (2-4 words)
@@ -80,22 +131,22 @@ def extract_patterns(text: str, ner_pipeline, embedder) -> List[Dict[str, Any]]:
                 for i in range(len(words) - 1):
                     # Bigrams
                     bigram = f"{words[i]} {words[i+1]}"
-                    if any(tech in bigram.lower() for tech in ['api', 'data', 'micro', 'event', 
+                    if any(tech in bigram.lower() for tech in ['api', 'data', 'micro', 'event',
                                                                 'service', 'container', 'cloud',
                                                                 'real-time', 'batch', 'stream']):
                         patterns_found.append(bigram)
-                    
+
                     # Trigrams
                     if i < len(words) - 2:
                         trigram = f"{words[i]} {words[i+1]} {words[i+2]}"
-                        if any(tech in trigram.lower() for tech in ['architecture', 'pattern', 
+                        if any(tech in trigram.lower() for tech in ['architecture', 'pattern',
                                                                      'system', 'infrastructure']):
                             patterns_found.append(trigram)
-        
+
         # 3. Deduplicate and score by frequency
         from collections import Counter
         pattern_counts = Counter(patterns_found)
-        
+
         # Return top patterns
         patterns = []
         for pattern, count in pattern_counts.most_common(10):
@@ -104,11 +155,11 @@ def extract_patterns(text: str, ner_pipeline, embedder) -> List[Dict[str, Any]]:
             if len(pattern_clean) > 5:  # Minimum length
                 patterns.append({
                     'pattern': pattern_clean,
-                    'confidence': min(count / len(sentences), 1.0)  # Normalize by sentence count
+                    'confidence': min(count / max(len(sentences), 1), 1.0)  # Normalize safely
                 })
-        
+
         return patterns[:8]  # Top 8
-        
+
     except Exception as e:
         print(f"Pattern extraction error: {e}")
         return []
@@ -116,29 +167,40 @@ def extract_patterns(text: str, ner_pipeline, embedder) -> List[Dict[str, Any]]:
 
 def load_embedder():
     """Load sentence transformer model."""
+    device_name, _ = get_device()
     print(f"Loading embedder: {EMBEDDER_NAME}")
-    return SentenceTransformer(EMBEDDER_NAME, cache_folder=str(CACHE_DIR))
+    return SentenceTransformer(EMBEDDER_NAME, cache_folder=str(CACHE_DIR), device=device_name)
 
 
 def load_ner_pipeline():
     """Load NER pipeline for entity extraction."""
+    device_name, device_id = get_device()
     print(f"Loading NER model: {NER_MODEL}")
-    return pipeline(
+    pipe = pipeline(
         "ner",
         model=NER_MODEL,
         aggregation_strategy="simple",
-        device=-1  # CPU
+        device=device_id
     )
+    # For MPS, move model explicitly
+    if device_name == 'mps':
+        pipe.model.to('mps')
+    return pipe
 
 
 def load_qa_pipeline():
     """Load Q&A pipeline for problem/approach extraction."""
+    device_name, device_id = get_device()
     print(f"Loading Q&A model: {QA_MODEL}")
-    return pipeline(
+    pipe = pipeline(
         "question-answering",
         model=QA_MODEL,
-        device=-1  # CPU
+        device=device_id
     )
+    # For MPS, move model explicitly
+    if device_name == 'mps':
+        pipe.model.to('mps')
+    return pipe
 
 
 def extract_tech_stack(text: str, ner_pipeline) -> List[Dict[str, Any]]:
@@ -150,9 +212,9 @@ def extract_tech_stack(text: str, ner_pipeline) -> List[Dict[str, Any]]:
     """
     if not text or len(text.strip()) < 10:
         return []
-    
-    # Limit text to avoid OOM (first 2000 chars usually sufficient)
-    text_sample = text[:2000]
+
+    # Clean full text for NER
+    text_sample = clean_markdown(text)
     
     try:
         entities = ner_pipeline(text_sample)
@@ -178,7 +240,7 @@ def extract_tech_stack(text: str, ner_pipeline) -> List[Dict[str, Any]]:
                 tech_mentions.append({
                     'name': word_clean,
                     'type': entity_type,
-                    'score': round(score, 3)
+                    'score': float(score)  # Convert numpy float32 to Python float
                 })
     
     return tech_mentions[:15]  # Top 15 mentions
@@ -214,13 +276,14 @@ def extract_solutions(text: str, tech_stack: List[Dict], embedder) -> List[str]:
         
         # Get embeddings for templates
         template_embeddings = embedder.encode(solution_templates)
-        
-        # Split text into sentences
-        sentences = [s.strip() for s in text.split('.') if len(s.strip()) > 30][:50]
-        
+
+        # Use cleaned text and split into sentences
+        clean_text = clean_markdown(text)
+        sentences = [s.strip() for s in clean_text.split('.') if len(s.strip()) > 30][:50]
+
         if not sentences:
             return []
-        
+
         # Get embeddings for sentences
         sentence_embeddings = embedder.encode(sentences)
         
@@ -268,12 +331,12 @@ def extract_problem(text: str, qa_pipeline) -> str:
     """
     if not text or len(text) < 100:
         return None
-    
+
     try:
-        # Use first 2000 chars (intro section usually describes problem)
-        context = text[:2000]
-        
-        # Ask the model
+        # Use the cleaned full text as context (do not truncate here)
+        context = clean_markdown(text)
+
+        # Ask the model (the pipeline will handle internal truncation if needed)
         result = qa_pipeline(
             question="What problem or challenge did they face?",
             context=context
@@ -315,11 +378,12 @@ def extract_approach(text: str, qa_pipeline) -> str:
     """
     if not text or len(text) < 100:
         return None
-    
+
     try:
-        # Use middle section (2000-5000 chars) where solution is usually described
-        context = text[1000:5000] if len(text) > 5000 else text
-        
+        # Use cleaned full text as context (no hard truncation). If required,
+        # callers can chunk using chunk_text(). We avoid discarding content here.
+        context = clean_markdown(text)
+
         # Ask the model
         result = qa_pipeline(
             question="How did they solve the problem?",

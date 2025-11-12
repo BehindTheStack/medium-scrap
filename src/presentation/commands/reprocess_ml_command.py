@@ -161,7 +161,8 @@ def reprocess_ml_command(source, all_sources, limit, force):
                 'id': post['id'],
                 'title': post.get('title', 'Untitled'),
                 'date': date.isoformat() if date else None,
-                'content': md,
+                'content_markdown': md,  # ML processor expects this field name
+                'content': md,  # Keep for backward compatibility
                 'path': post.get('url', ''),
             })
         

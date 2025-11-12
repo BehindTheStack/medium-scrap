@@ -3,6 +3,7 @@ ML Processing Logic
 Handles all machine learning extraction operations
 """
 
+import re
 import time
 from typing import List, Dict, Any, Tuple, Optional, Callable
 from pathlib import Path
@@ -15,6 +16,7 @@ from rich.console import Console
 
 from ..schemas.ml_schemas import MLDiscoveryData
 from .progress_display import ProgressDisplay
+from .text_cleaner import clean_markdown, chunk_text
 
 
 class MLProcessor:
@@ -52,6 +54,9 @@ class MLProcessor:
         
         return load_time
     
+    # Note: text cleaning moved to src/presentation/helpers/text_cleaner.py
+    # We import and use clean_markdown() there so the cleaning logic is centralized
+    
     def cluster_topics(self, entries: List[Dict[str, Any]], texts: List[str]) -> Tuple[int, float]:
         """
         Cluster posts into topics using embeddings
@@ -66,37 +71,113 @@ class MLProcessor:
         self.console.print("[cyan]📊 Step 1/6: Clustering for topics...[/cyan]")
         step_start = time.time()
         
-        # Generate embeddings
-        embeddings = self.embedder.encode(texts, show_progress_bar=False, batch_size=32)
+        # Clean texts for clustering (preserve structure for better TF-IDF)
+        cleaned_texts = [clean_markdown(t, preserve_structure=True) for t in texts]
         
-        # Cluster
-        n_clusters = min(8, len(entries))
+        # Filter out empty or very short texts
+        valid_indices = []
+        valid_texts = []
+        for i, txt in enumerate(cleaned_texts):
+            if len(txt.strip()) > 50:  # Minimum meaningful length
+                valid_indices.append(i)
+                valid_texts.append(txt)
+        
+        if len(valid_texts) < 2:
+            # Not enough text to cluster
+            self.console.print(f"[yellow]⚠ Only {len(valid_texts)} posts have sufficient text, assigning default layer[/yellow]")
+            for entry in entries:
+                entry['layers'] = ['General']
+            return {
+                'num_clusters': 1,
+                'cluster_time': time.time() - step_start
+            }
+        
+        # Generate embeddings
+        embeddings = self.embedder.encode(valid_texts, show_progress_bar=False, batch_size=32)
+        
+        # Cluster (adjust n_clusters based on data size)
+        n_clusters = min(8, max(2, len(valid_texts) // 5))  # At least 5 posts per cluster
         kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
         cluster_labels = kmeans.fit_predict(embeddings)
         
         # Extract cluster keywords with TF-IDF
-        vectorizer = TfidfVectorizer(max_features=500, stop_words='english', ngram_range=(1, 2))
-        tfidf_matrix = vectorizer.fit_transform(texts)
-        feature_names = vectorizer.get_feature_names_out()
+        try:
+            vectorizer = TfidfVectorizer(
+                max_features=500, 
+                stop_words='english', 
+                ngram_range=(1, 2),
+                min_df=1,
+                max_df=0.95,
+                token_pattern=r'\b[a-zA-Z]{3,}\b'  # Words with 3+ letters only
+            )
+            tfidf_matrix = vectorizer.fit_transform(valid_texts)
+            feature_names = vectorizer.get_feature_names_out()
+            
+            cluster_info = {}
+            for cluster_id in range(n_clusters):
+                cluster_mask = cluster_labels == cluster_id
+                cluster_tfidf = tfidf_matrix[cluster_mask].mean(axis=0).A1
+                top_indices = cluster_tfidf.argsort()[-10:][::-1]
+                keywords = [feature_names[i] for i in top_indices if i < len(feature_names)]
+                
+                # Create meaningful label from keywords
+                if keywords:
+                    # Use top 2 keywords for label
+                    label = ' & '.join(keywords[:2]).title()
+                else:
+                    label = f"Topic {cluster_id + 1}"
+                    
+                cluster_info[cluster_id] = {'label': label, 'keywords': keywords}
+                
+        except ValueError as e:
+            # TF-IDF failed - use generic labels with word frequency fallback
+            self.console.print(f"[yellow]⚠ TF-IDF failed, using word frequency for labels[/yellow]")
+            cluster_info = {}
+            
+            for cluster_id in range(n_clusters):
+                cluster_mask = cluster_labels == cluster_id
+                cluster_texts = [valid_texts[i] for i in range(len(cluster_labels)) if cluster_mask[i]]
+                
+                # Simple word frequency
+                from collections import Counter
+                words = []
+                for txt in cluster_texts:
+                    # Extract words (3+ letters, alphanumeric)
+                    words.extend(re.findall(r'\b[a-zA-Z]{3,}\b', txt.lower()))
+                
+                # Remove common stop words manually
+                stop_words = {'the', 'and', 'for', 'are', 'with', 'this', 'that', 'from', 
+                             'was', 'were', 'have', 'has', 'had', 'been', 'our', 'their'}
+                words = [w for w in words if w not in stop_words]
+                
+                if words:
+                    common = Counter(words).most_common(5)
+                    keywords = [w for w, _ in common]
+                    label = ' & '.join(keywords[:2]).title()
+                else:
+                    keywords = []
+                    label = f"Topic {cluster_id + 1}"
+                
+                cluster_info[cluster_id] = {'label': label, 'keywords': keywords}
         
-        cluster_info = {}
-        for cluster_id in range(n_clusters):
-            cluster_mask = cluster_labels == cluster_id
-            cluster_tfidf = tfidf_matrix[cluster_mask].mean(axis=0).A1
-            top_indices = cluster_tfidf.argsort()[-10:][::-1]
-            keywords = [feature_names[i] for i in top_indices]
-            label = keywords[0].replace('_', ' ').title()
-            cluster_info[cluster_id] = {'label': label}
-        
-        # Assign layers to entries
+        # Assign layers to all entries (including those skipped)
+        cluster_idx = 0
         for i, entry in enumerate(entries):
-            entry['layers'] = [cluster_info[cluster_labels[i]]['label']]
+            if i in valid_indices:
+                entry['layers'] = [cluster_info[cluster_labels[cluster_idx]]['label']]
+                cluster_idx += 1
+            else:
+                # Assign to a default or most common cluster
+                entry['layers'] = [cluster_info[0]['label']] if cluster_info else ['General']
         
         step_time = time.time() - step_start
         self.console.print(f"[green]✓ Discovered {n_clusters} topics in {step_time:.1f}s[/green]")
         self.console.print()
         
-        return n_clusters, step_time
+        return {
+            'num_clusters': n_clusters,
+            'cluster_time': step_time
+        }
     
     def extract_all_features(self, entries: List[Dict[str, Any]]) -> Dict[str, int]:
         """
@@ -199,8 +280,11 @@ class MLProcessor:
         
         self.load_models()
         
+        # Extract and clean texts from entries (centralized helper)
+        texts = [clean_markdown(entry.get('content_markdown', '')) for entry in entries]
+        
         # Step 1: Clustering for layers
-        cluster_stats = self.cluster_topics(entries)
+        cluster_stats = self.cluster_topics(entries, texts)
         
         # Step 2: Extract all features (with incremental save if callback provided)
         if save_callback:
@@ -224,6 +308,24 @@ class MLProcessor:
             extract_problem, extract_approach
         )
         
+        total_posts = len(entries)
+        
+        # Filter valid entries first
+        valid_entries = [e for e in entries if e.get('content_markdown', '') and len(e.get('content_markdown', '')) >= 100]
+        
+        if not valid_entries:
+            self.console.print("[yellow]⚠ No valid entries with sufficient content[/yellow]")
+            return {
+                'tech_stack_extracted': 0,
+                'patterns_extracted': 0,
+                'solutions_extracted': 0,
+                'problems_extracted': 0,
+                'approaches_extracted': 0,
+            }
+        
+        self.console.print("[cyan]🤖 Processing ML extractions...[/cyan]")
+        self.console.print()
+        
         stats = {
             'tech_stack_extracted': 0,
             'patterns_extracted': 0,
@@ -232,41 +334,104 @@ class MLProcessor:
             'approaches_extracted': 0,
         }
         
-        for entry in entries:
-            content = entry.get('content_markdown', '')
-            if not content or len(content) < 100:
-                continue
-            
-            # Extract each feature
-            tech_stack = extract_tech_stack(content, self.ner_pipeline)
-            patterns = extract_patterns(content, self.ner_pipeline, self.embedder)
-            solutions = extract_solutions(content, self.embedder)
-            problem = extract_problem(content, self.qa_pipeline)
-            approach = extract_approach(content, self.qa_pipeline)
-            
-            # Update entry
+        # Step 2: Tech Stack (NER)
+        self.console.print(f"[cyan]📊 Step 2/6: Extracting tech stack (NER)...[/cyan]")
+        for entry in valid_entries:
+            content_clean = clean_markdown(entry['content_markdown'])
+            tech_stack = extract_tech_stack(content_clean, self.ner_pipeline)
             entry['tech_stack'] = tech_stack
+            if tech_stack:
+                stats['tech_stack_extracted'] += 1
+        self.console.print(f"[green]✓ Extracted tech stack from {stats['tech_stack_extracted']} posts[/green]")
+        self.console.print()
+        
+        # Clear GPU cache
+        self._clear_gpu_cache()
+        
+        # Step 3: Patterns (NER + ngrams)
+        self.console.print(f"[cyan]📊 Step 3/6: Extracting patterns (NER + semantic)...[/cyan]")
+        for entry in valid_entries:
+            content_clean = clean_markdown(entry['content_markdown'])
+            patterns = extract_patterns(content_clean, self.ner_pipeline, self.embedder)
             entry['patterns'] = patterns
+            if patterns:
+                stats['patterns_extracted'] += 1
+        self.console.print(f"[green]✓ Extracted patterns from {stats['patterns_extracted']} posts[/green]")
+        self.console.print()
+        
+        # Clear GPU cache
+        self._clear_gpu_cache()
+        
+        # Step 4: Solutions (Embeddings)
+        self.console.print(f"[cyan]📊 Step 4/6: Extracting solutions (semantic similarity)...[/cyan]")
+        for entry in valid_entries:
+            content_clean = clean_markdown(entry['content_markdown'])
+            tech_stack = entry.get('tech_stack', [])
+            solutions = extract_solutions(content_clean, tech_stack, self.embedder)
             entry['solutions'] = solutions
+            if solutions:
+                stats['solutions_extracted'] += 1
+        self.console.print(f"[green]✓ Extracted solutions from {stats['solutions_extracted']} posts[/green]")
+        self.console.print()
+        
+        # Clear GPU cache
+        self._clear_gpu_cache()
+        
+        # Step 5: Problems (Q&A)
+        self.console.print(f"[cyan]📊 Step 5/6: Extracting problems (Q&A)...[/cyan]")
+        for entry in valid_entries:
+            content_clean = clean_markdown(entry['content_markdown'])
+            problem = extract_problem(content_clean, self.qa_pipeline)
             entry['problem'] = problem
+            if problem:
+                stats['problems_extracted'] += 1
+        self.console.print(f"[green]✓ Extracted problems from {stats['problems_extracted']} posts[/green]")
+        self.console.print()
+        
+        # Clear GPU cache
+        self._clear_gpu_cache()
+        
+        # Step 6: Approaches (Q&A)
+        self.console.print(f"[cyan]📊 Step 6/6: Extracting approaches (Q&A)...[/cyan]")
+        for entry in valid_entries:
+            content_clean = clean_markdown(entry['content_markdown'])
+            approach = extract_approach(content_clean, self.qa_pipeline)
             entry['approach'] = approach
-            
-            # Update stats
-            if tech_stack: stats['tech_stack_extracted'] += 1
-            if patterns: stats['patterns_extracted'] += 1
-            if solutions: stats['solutions_extracted'] += 1
-            if problem: stats['problems_extracted'] += 1
-            if approach: stats['approaches_extracted'] += 1
-            
-            # SAVE IMMEDIATELY after processing this post
+            if approach:
+                stats['approaches_extracted'] += 1
+        self.console.print(f"[green]✓ Extracted approaches from {stats['approaches_extracted']} posts[/green]")
+        self.console.print()
+        
+        # Final GPU cleanup
+        self._clear_gpu_cache()
+        
+        # Save all processed entries
+        self.console.print(f"[cyan]💾 Saving {len(valid_entries)} processed posts...[/cyan]")
+        saved = 0
+        for entry in valid_entries:
             ml_data = {
                 'layers': entry.get('layers', []),
-                'tech_stack': tech_stack,
-                'patterns': patterns,
-                'solutions': solutions,
-                'problem': problem,
-                'approach': approach
+                'tech_stack': entry.get('tech_stack', []),
+                'patterns': entry.get('patterns', []),
+                'solutions': entry.get('solutions', []),
+                'problem': entry.get('problem'),
+                'approach': entry.get('approach'),
             }
             save_callback(entry['id'], ml_data)
+            saved += 1
+            if saved % 10 == 0:
+                self.console.print(f"[dim]  Saved {saved}/{len(valid_entries)}...[/dim]", end='\r')
+        
+        self.console.print(f"[green]✓ Saved {saved} posts to database[/green]")
+        self.console.print()
         
         return stats
+    
+    def _clear_gpu_cache(self):
+        """Clear GPU cache to avoid memory issues"""
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:
+            pass

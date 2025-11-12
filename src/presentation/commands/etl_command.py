@@ -21,6 +21,7 @@ from ...infrastructure import content_extractor
 from ...domain.entities.publication import Post, PostId, Author
 from ..helpers.ml_processor import MLProcessor
 from ..helpers.progress_display import ProgressDisplay
+from ..helpers.text_cleaner import clean_markdown
 
 
 @click.command('etl')
@@ -169,7 +170,8 @@ def _enrich_posts(console: Console, db: PipelineDB, source: str, limit: int, slo
             
             post_data['content_html'] = html
             post_data['content_markdown'] = md
-            post_data['content_text'] = text_only[:5000]
+            # Keep full cleaned content for ML processing (no hard truncation)
+            post_data['content_text'] = clean_markdown(text_only)
             post_data['has_markdown'] = True
             post_data['is_technical'] = classification.get('is_technical')
             post_data['technical_score'] = classification.get('score')
