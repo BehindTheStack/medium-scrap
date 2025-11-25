@@ -367,10 +367,13 @@ class MediumApiAdapter(PostRepository):
         node {
           id
           title
-          uniqueSlug
-          firstPublishedAt
-          latestPublishedAt
-          readingTime
+                    uniqueSlug
+                    canonicalUrl
+                    tags
+                    virtuals { totalClapCount }
+                    firstPublishedAt
+                    latestPublishedAt
+                    readingTime
           creator {
             id
             name
@@ -519,6 +522,9 @@ class MediumApiAdapter(PostRepository):
                                     id
                                     title
                                     uniqueSlug
+                                    canonicalUrl
+                                    tags
+                                    virtuals { totalClapCount }
                                     firstPublishedAt
                                     latestPublishedAt
                                     readingTime
@@ -570,6 +576,9 @@ class MediumApiAdapter(PostRepository):
                                     id
                                     title
                                     uniqueSlug
+                                    canonicalUrl
+                                    tags
+                                    virtuals { totalClapCount }
                                     firstPublishedAt
                                     __typename
                                 }
@@ -605,7 +614,11 @@ class MediumApiAdapter(PostRepository):
             published_at=published_at,
             reading_time=post_data.get("readingTime", 0),
             subtitle=subtitle,
-            latest_published_at=latest_published_at
+            latest_published_at=latest_published_at,
+            # Populate optional metadata when available
+            url=post_data.get('canonicalUrl') or f"https://medium.com/p/{post_data.get('id')}",
+            tags=post_data.get('tags') or [],
+            claps=(post_data.get('virtuals') or {}).get('totalClapCount')
         )
 
     def fetch_post_html(self, post: Post, config: PublicationConfig) -> Optional[str]:

@@ -65,6 +65,9 @@ class Post:
     subtitle: Optional[str] = None
     content_html: Optional[str] = None
     latest_published_at: Optional[datetime] = None
+    url: Optional[str] = None
+    tags: Optional[List[str]] = None
+    claps: Optional[int] = None
     
     def __post_init__(self):
         if not self.title:
