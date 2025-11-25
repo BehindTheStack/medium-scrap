@@ -311,56 +311,85 @@ def _process_enrichment(
         post_entities[post_data['id']] = post
         post_configs[post_data['id']] = cfg
 
-    # Phase 1: fetch HTML in threads
+    # Phase 1: fetch HTML in threads (with live progress)
     html_map: Dict[str, Optional[str]] = {}
-    with ThreadPoolExecutor(max_workers=fetch_workers) as tpool:
-        future_to_pid = {}
-        import random
+    import random
+    from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeElapsedColumn
 
-        def _fetch_wrapper(post_obj, cfg_obj):
-            # Small jitter to avoid bursty simultaneous requests
-            try:
-                time.sleep(random.uniform(0.0, 0.8))
-            except Exception:
-                pass
-            return adapter.fetch_post_html(post_obj, cfg_obj)
-        for post_data in posts:
-            pid = post_data['id']
-            post = post_entities[pid]
-            cfg = post_configs[pid]
-            future = tpool.submit(_fetch_wrapper, post, cfg)
-            future_to_pid[future] = pid
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TextColumn("({task.completed}/{task.total})"),
+        TimeElapsedColumn(),
+        console=console,
+    ) as progress:
+        fetch_task = progress.add_task("Fetching HTML", total=total)
 
-        for fut in as_completed(future_to_pid):
-            pid = future_to_pid[fut]
-            try:
-                html = fut.result()
-            except Exception as e:
-                html = None
-                reason = str(e)[:200]
-                failure_reasons[reason] = failure_reasons.get(reason, 0) + 1
-                console.print(f"[yellow]⚠ Fetch failed for {pid}: {reason}[/yellow]")
-            html_map[pid] = html
+        with ThreadPoolExecutor(max_workers=fetch_workers) as tpool:
+            future_to_pid = {}
 
-    # Phase 2: parse HTML -> markdown in processes
+            def _fetch_wrapper(post_obj, cfg_obj):
+                # Small jitter to avoid bursty simultaneous requests
+                try:
+                    time.sleep(random.uniform(0.0, 0.8))
+                except Exception:
+                    pass
+                return adapter.fetch_post_html(post_obj, cfg_obj)
+
+            for post_data in posts:
+                pid = post_data['id']
+                post = post_entities[pid]
+                cfg = post_configs[pid]
+                future = tpool.submit(_fetch_wrapper, post, cfg)
+                future_to_pid[future] = pid
+
+            for fut in as_completed(future_to_pid):
+                pid = future_to_pid[fut]
+                try:
+                    html = fut.result()
+                except Exception as e:
+                    html = None
+                    reason = str(e)[:200]
+                    failure_reasons[reason] = failure_reasons.get(reason, 0) + 1
+                    console.print(f"[yellow]⚠ Fetch failed for {pid}: {reason}[/yellow]")
+                html_map[pid] = html
+                progress.update(fetch_task, advance=1, description=f"Fetching {pid}")
+
+    # Phase 2: parse HTML -> markdown in processes (with live progress)
     parse_futures = {}
-    with ProcessPoolExecutor(max_workers=parse_workers) as ppool:
-        for pid, html in html_map.items():
-            if not html:
-                continue
-            # Submit parser; content_extractor.html_to_markdown is picklable as module-level
-            parse_futures[ppool.submit(content_extractor.html_to_markdown, html)] = pid
+    # Count how many items will be parsed
+    html_items = [(pid, html) for pid, html in html_map.items() if html]
+    total_parse = len(html_items)
+    from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeElapsedColumn
 
-        parsed_map: Dict[str, Tuple[str, List[Dict], List[Dict]]] = {}
-        for fut in as_completed(parse_futures):
-            pid = parse_futures[fut]
-            try:
-                md, assets, code_blocks = fut.result()
-                parsed_map[pid] = (md, assets, code_blocks)
-            except Exception as e:
-                reason = str(e)[:200]
-                failure_reasons[reason] = failure_reasons.get(reason, 0) + 1
-                console.print(f"[yellow]⚠ Parse failed for {pid}: {reason}[/yellow]")
+    parsed_map: Dict[str, Tuple[str, List[Dict], List[Dict]]] = {}
+    if total_parse > 0:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("({task.completed}/{task.total})"),
+            TimeElapsedColumn(),
+            console=console,
+        ) as progress:
+            parse_task = progress.add_task("Parsing HTML", total=total_parse)
+
+            with ProcessPoolExecutor(max_workers=parse_workers) as ppool:
+                for pid, html in html_items:
+                    # Submit parser; content_extractor.html_to_markdown is picklable as module-level
+                    parse_futures[ppool.submit(content_extractor.html_to_markdown, html)] = pid
+
+                for fut in as_completed(parse_futures):
+                    pid = parse_futures[fut]
+                    try:
+                        md, assets, code_blocks = fut.result()
+                        parsed_map[pid] = (md, assets, code_blocks)
+                    except Exception as e:
+                        reason = str(e)[:200]
+                        failure_reasons[reason] = failure_reasons.get(reason, 0) + 1
+                        console.print(f"[yellow]⚠ Parse failed for {pid}: {reason}[/yellow]")
+                    progress.update(parse_task, advance=1, description=f"Parsing {pid}")
 
     # Phase 3: assemble results and write to DB serially
     processed = 0
