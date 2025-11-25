@@ -669,34 +669,16 @@ def _run_ml_processing(
     """
     ml_processor = MLProcessor(console)
     ml_processor.load_models()
-    
+
     try:
-        ml_processor.process_posts(entries)
-        
-        # Save ML data to database
-        console.print("[cyan]💾 Saving ML data to database...[/cyan]")
-        
-        with ProgressDisplay.create_simple_progress(console) as progress:
-            task = progress.add_task(
-                "[cyan]Saving to DB",
-                total=len(entries)
-            )
-            
-            for entry in entries:
-                ml_data = {
-                    'layers': entry.get('layers', []),
-                    'tech_stack': entry.get('tech_stack', []),
-                    'patterns': entry.get('patterns', []),
-                    'solutions': entry.get('solutions', []),
-                    'problem': entry.get('problem'),
-                    'approach': entry.get('approach')
-                }
-                db.update_ml_discovery(entry['id'], ml_data)
-                progress.update(task, advance=1)
-        
-        console.print("[green]✓ Saved ML data to database[/green]")
+        # Process posts and use incremental save callback so each post is
+        # persisted immediately after extraction. This makes the ML stage
+        # resumable if the process dies mid-run.
+        console.print("[cyan]🤖 Running ML processing (incremental save)...[/cyan]")
+        ml_processor.process_posts(entries, save_callback=db.update_ml_discovery)
+        console.print("[green]✓ ML processing completed (incremental saves applied)[/green]")
         console.print()
-        
+
     except Exception as e:
         console.print(f"[red]❌ ML Discovery failed: {e}[/red]")
         raise
