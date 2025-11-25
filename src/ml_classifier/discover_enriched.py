@@ -168,8 +168,18 @@ def extract_patterns(text: str, ner_pipeline, embedder) -> List[Dict[str, Any]]:
 def load_embedder():
     """Load sentence transformer model."""
     device_name, _ = get_device()
-    print(f"Loading embedder: {EMBEDDER_NAME}")
-    return SentenceTransformer(EMBEDDER_NAME, cache_folder=str(CACHE_DIR), device=device_name)
+    print(f"Loading embedder: {EMBEDDER_NAME} (device={device_name})")
+    st = SentenceTransformer(EMBEDDER_NAME, cache_folder=str(CACHE_DIR), device=device_name)
+    # Attempt to report the device the embedder model is actually using
+    try:
+        dev = getattr(st, 'device', None)
+        if dev is None:
+            # SentenceTransformer may expose underlying model
+            dev = getattr(st._first_module(), 'device', None)
+        print(f"✓ Embedder loaded on device: {dev}")
+    except Exception:
+        print("✓ Embedder loaded (device unknown)")
+    return st
 
 
 def load_ner_pipeline():
@@ -185,6 +195,17 @@ def load_ner_pipeline():
     # For MPS, move model explicitly
     if device_name == 'mps':
         pipe.model.to('mps')
+    # Report pipeline model device
+    try:
+        # Try to find a parameter and read its device
+        model_device = None
+        try:
+            model_device = next(pipe.model.parameters()).device
+        except Exception:
+            model_device = getattr(pipe.model, 'device', None)
+        print(f"✓ NER pipeline model device: {model_device}")
+    except Exception:
+        print("✓ NER pipeline loaded (device unknown)")
     return pipe
 
 
@@ -200,6 +221,16 @@ def load_qa_pipeline():
     # For MPS, move model explicitly
     if device_name == 'mps':
         pipe.model.to('mps')
+    # Report pipeline model device
+    try:
+        model_device = None
+        try:
+            model_device = next(pipe.model.parameters()).device
+        except Exception:
+            model_device = getattr(pipe.model, 'device', None)
+        print(f"✓ Q&A pipeline model device: {model_device}")
+    except Exception:
+        print("✓ Q&A pipeline loaded (device unknown)")
     return pipe
 
 
