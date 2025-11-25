@@ -633,10 +633,10 @@ class MediumApiAdapter(PostRepository):
 
                 if response.status_code == 200:
                     return response.text
-                elif response.status_code == 429:
-                    # Rate limited - retry with exponential backoff (silent to not interfere with Rich Progress)
+                elif response.status_code in (429, 403):
+                    # Rate limited or blocked - retry with exponential backoff (silent to not interfere with Rich Progress)
                     if attempt < max_retries - 1:
-                        wait_time = base_delay * (2 ** attempt)  # Exponential: 3, 6, 12, 24, 48s
+                        wait_time = base_delay * (2 ** attempt)  # Exponential backoff: 3,6,12...
                         time.sleep(wait_time)
                         continue
                     else:

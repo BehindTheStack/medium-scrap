@@ -287,33 +287,136 @@ def _process_enrichment(
     Returns:
         Tuple of (enriched_count, failed_count, failure_reasons_dict)
     """
+    # Parallelized enrichment: fetch (threads) + parse (processes) + serial DB writes
+    from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
+    import multiprocessing
+
+    total = len(posts)
     enriched = 0
     failed = 0
     failure_reasons: Dict[str, int] = {}
-    
-    for i, post_data in enumerate(posts, 1):
-        _show_enrichment_progress(console, i, len(posts))
-        
-        # Add delay between posts
-        if i > 1:
-            delay = SLOW_MODE_DELAY if slow_mode else NORMAL_MODE_DELAY
-            time.sleep(delay)
-        
-        success, reason = _enrich_single_post(
-            db,
-            adapter,
-            config_manager,
-            source,
-            post_data
-        )
-        
-        if success:
-            enriched += 1
-        else:
-            failed += 1
-            if reason:
+
+    # Determine workers
+    fetch_workers = 1 if slow_mode else min(8, max(2, (multiprocessing.cpu_count() // 2)))
+    parse_workers = max(1, multiprocessing.cpu_count() // 2)
+
+    console.print(f"[dim]Fetching HTML with {fetch_workers} threads and parsing with {parse_workers} processes...[/dim]")
+
+    # Prepare post entities and configs
+    post_entities = {}
+    post_configs = {}
+    for post_data in posts:
+        cfg = _get_post_config(config_manager, source, post_data.get('publication'))
+        post = _create_post_entity(post_data)
+        post_entities[post_data['id']] = post
+        post_configs[post_data['id']] = cfg
+
+    # Phase 1: fetch HTML in threads
+    html_map: Dict[str, Optional[str]] = {}
+    with ThreadPoolExecutor(max_workers=fetch_workers) as tpool:
+        future_to_pid = {}
+        import random
+
+        def _fetch_wrapper(post_obj, cfg_obj):
+            # Small jitter to avoid bursty simultaneous requests
+            try:
+                time.sleep(random.uniform(0.0, 0.8))
+            except Exception:
+                pass
+            return adapter.fetch_post_html(post_obj, cfg_obj)
+        for post_data in posts:
+            pid = post_data['id']
+            post = post_entities[pid]
+            cfg = post_configs[pid]
+            future = tpool.submit(_fetch_wrapper, post, cfg)
+            future_to_pid[future] = pid
+
+        for fut in as_completed(future_to_pid):
+            pid = future_to_pid[fut]
+            try:
+                html = fut.result()
+            except Exception as e:
+                html = None
+                reason = str(e)[:200]
                 failure_reasons[reason] = failure_reasons.get(reason, 0) + 1
-    
+                console.print(f"[yellow]⚠ Fetch failed for {pid}: {reason}[/yellow]")
+            html_map[pid] = html
+
+    # Phase 2: parse HTML -> markdown in processes
+    parse_futures = {}
+    with ProcessPoolExecutor(max_workers=parse_workers) as ppool:
+        for pid, html in html_map.items():
+            if not html:
+                continue
+            # Submit parser; content_extractor.html_to_markdown is picklable as module-level
+            parse_futures[ppool.submit(content_extractor.html_to_markdown, html)] = pid
+
+        parsed_map: Dict[str, Tuple[str, List[Dict], List[Dict]]] = {}
+        for fut in as_completed(parse_futures):
+            pid = parse_futures[fut]
+            try:
+                md, assets, code_blocks = fut.result()
+                parsed_map[pid] = (md, assets, code_blocks)
+            except Exception as e:
+                reason = str(e)[:200]
+                failure_reasons[reason] = failure_reasons.get(reason, 0) + 1
+                console.print(f"[yellow]⚠ Parse failed for {pid}: {reason}[/yellow]")
+
+    # Phase 3: assemble results and write to DB serially
+    processed = 0
+    for i, post_data in enumerate(posts, 1):
+        pid = post_data['id']
+        _show_enrichment_progress(console, i, total)
+
+        html = html_map.get(pid)
+        if not html:
+            failed += 1
+            console.print(f"[yellow]⚠ No HTML fetched for post {pid}; skipping.[/yellow]")
+            continue
+
+        parsed = parsed_map.get(pid)
+        if not parsed:
+            failed += 1
+            continue
+
+        try:
+            md, assets, code_blocks = parsed
+
+            classification = content_extractor.classify_technical(html, code_blocks)
+
+            # Clean text for ML processing
+            text_only = re.sub(r'[#*`\[\]()]+', ' ', md)
+            text_only = re.sub(r'\s+', ' ', text_only).strip()
+
+            # Update post data
+            post_data['content_html'] = html
+            post_data['content_markdown'] = md
+            post_data['content_text'] = clean_markdown(text_only)
+            post_data['has_markdown'] = True
+            post_data['is_technical'] = classification.get('is_technical')
+            post_data['technical_score'] = classification.get('score')
+            post_data['code_blocks'] = len(code_blocks)
+            post_data['metadata'] = {
+                'classifier': classification,
+                'code_blocks': code_blocks,
+                'assets': assets
+            }
+
+            db.add_or_update_post(post_data)
+            enriched += 1
+            processed += 1
+
+            # Respect small delay after DB write if slow_mode to reduce load
+            if slow_mode:
+                time.sleep(SLOW_MODE_DELAY)
+            else:
+                time.sleep(NORMAL_MODE_DELAY)
+
+        except Exception as e:
+            failed += 1
+            reason = str(e)[:50]
+            failure_reasons[reason] = failure_reasons.get(reason, 0) + 1
+
     return enriched, failed, failure_reasons
 
 
