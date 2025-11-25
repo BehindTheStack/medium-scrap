@@ -25,6 +25,14 @@ class PipelineDB:
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row  # Return rows as dicts
         try:
+            # Improve concurrency for multiple writers/readers
+            # Enable Write-Ahead Logging (WAL) and relaxed synchronous for speed
+            conn.execute("PRAGMA journal_mode=WAL;")
+            conn.execute("PRAGMA synchronous=NORMAL;")
+        except Exception:
+            # If PRAGMA fails, continue with default settings
+            pass
+        try:
             yield conn
             conn.commit()
         except Exception:
