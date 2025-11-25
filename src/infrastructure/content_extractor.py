@@ -24,6 +24,12 @@ _HAS_BS4 = True
 try:
     from bs4 import BeautifulSoup
     from markdownify import markdownify as mdify
+    try:
+        # prefer lxml parser when available for better performance
+        import lxml  # type: ignore
+        _BS_PARSER = 'lxml'
+    except Exception:
+        _BS_PARSER = 'html.parser'
 except Exception:
     _HAS_BS4 = False
     from html.parser import HTMLParser
@@ -48,7 +54,7 @@ def extract_code_blocks(html: str) -> List[Dict]:
     2. Try Pygments.guess_lexer as a fallback.
     3. Use small heuristics for a few common languages.
     """
-    soup = BeautifulSoup(html, 'html.parser')
+    soup = BeautifulSoup(html, _BS_PARSER)
     blocks = []
 
     for pre in soup.find_all('pre'):
@@ -127,7 +133,7 @@ def html_to_markdown(html: str) -> Tuple[str, List[Dict], List[Dict]]:
                 break
 
     # If we found a candidate, work on a copy of that node only; otherwise keep full soup
-    content_soup = BeautifulSoup(str(main_node), 'html.parser') if main_node else soup
+    content_soup = BeautifulSoup(str(main_node), _BS_PARSER) if main_node else soup
 
     # Remove common noisy elements: nav/header/footer/aside/forms and signup/signin links
     noisy_tags = ['nav', 'header', 'footer', 'aside', 'form', 'noscript', 'script', 'iframe']

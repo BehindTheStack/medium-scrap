@@ -312,9 +312,12 @@ class MLProcessor:
             return {'total': 0}
         
         self.load_models()
-        
-        # Extract and clean texts from entries (centralized helper)
-        texts = [clean_markdown(entry.get('content_markdown', '')) for entry in entries]
+
+        # Extract and clean texts from entries once and cache on the entry dict
+        for entry in entries:
+            if '_clean' not in entry:
+                entry['_clean'] = clean_markdown(entry.get('content_markdown', ''))
+        texts = [entry.get('_clean', '') for entry in entries]
         
         # Step 1: Clustering for layers
         cluster_stats = self.cluster_topics(entries, texts)
@@ -381,7 +384,7 @@ class MLProcessor:
         ) as progress:
             task = progress.add_task("[cyan]Extracting tech stack", total=len(valid_entries))
             for entry in valid_entries:
-                content_clean = clean_markdown(entry['content_markdown'])
+                content_clean = entry.get('_clean') or clean_markdown(entry.get('content_markdown', ''))
                 tech_stack = extract_tech_stack(content_clean, self.ner_pipeline)
                 entry['tech_stack'] = tech_stack
                 if tech_stack:
@@ -404,7 +407,7 @@ class MLProcessor:
         ) as progress:
             task = progress.add_task("[cyan]Extracting patterns", total=len(valid_entries))
             for entry in valid_entries:
-                content_clean = clean_markdown(entry['content_markdown'])
+                content_clean = entry.get('_clean') or clean_markdown(entry.get('content_markdown', ''))
                 patterns = extract_patterns(content_clean, self.ner_pipeline, self.embedder)
                 entry['patterns'] = patterns
                 if patterns:
@@ -427,7 +430,7 @@ class MLProcessor:
         ) as progress:
             task = progress.add_task("[cyan]Extracting solutions", total=len(valid_entries))
             for entry in valid_entries:
-                content_clean = clean_markdown(entry['content_markdown'])
+                content_clean = entry.get('_clean') or clean_markdown(entry.get('content_markdown', ''))
                 tech_stack = entry.get('tech_stack', [])
                 solutions = extract_solutions(content_clean, tech_stack, self.embedder)
                 entry['solutions'] = solutions
@@ -451,7 +454,7 @@ class MLProcessor:
         ) as progress:
             task = progress.add_task("[cyan]Extracting problems", total=len(valid_entries))
             for entry in valid_entries:
-                content_clean = clean_markdown(entry['content_markdown'])
+                content_clean = entry.get('_clean') or clean_markdown(entry.get('content_markdown', ''))
                 problem = extract_problem(content_clean, self.qa_pipeline)
                 entry['problem'] = problem
                 if problem:
@@ -474,7 +477,7 @@ class MLProcessor:
         ) as progress:
             task = progress.add_task("[cyan]Extracting approaches", total=len(valid_entries))
             for entry in valid_entries:
-                content_clean = clean_markdown(entry['content_markdown'])
+                content_clean = entry.get('_clean') or clean_markdown(entry.get('content_markdown', ''))
                 approach = extract_approach(content_clean, self.qa_pipeline)
                 entry['approach'] = approach
                 if approach:

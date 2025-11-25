@@ -9,6 +9,20 @@ it explicitly by passing a max_chars value.
 from typing import List, Optional
 import re
 
+# Precompile regular expressions to avoid recompilation on every call
+_IMG_RE = re.compile(r'!\[([^\]]*)\]\([^\)]+\)')
+_LINK_RE = re.compile(r'\[([^\]]+)\]\([^\)]+\)')
+_URL_RE = re.compile(r'(?<!\]\()https?://\S+')
+_FENCED_RE = re.compile(r'```[a-zA-Z0-9\-]*\n')
+_HEADER_RE = re.compile(r'^#{1,6}\s+', flags=re.MULTILINE)
+_BOLD_RE = re.compile(r'[\*\_]{2,}')
+_HR_RE = re.compile(r'^[-*_]{3,}$', flags=re.MULTILINE)
+_HTML_TAG_RE = re.compile(r'<[^>]+>')
+_HTML_ENTITY_RE = re.compile(r'&[a-z]+;', flags=re.IGNORECASE)
+_PARA_RE = re.compile(r'\n\s*\n+')
+_SPACE_RE = re.compile(r'[ \t]+')
+_ALL_WS_RE = re.compile(r'\s+')
+
 
 def clean_markdown(text: Optional[str], preserve_structure: bool = True) -> str:
     """Clean markdown/HTML and normalize whitespace.
@@ -34,44 +48,44 @@ def clean_markdown(text: Optional[str], preserve_structure: bool = True) -> str:
     text = str(text)
 
     # Remove image tags but keep alt text: ![alt](url) -> alt
-    text = re.sub(r'!\[([^\]]*)\]\([^\)]+\)', r'\1', text)
+    text = _IMG_RE.sub(r'\1', text)
 
     # Replace markdown links [text](url) -> text
-    text = re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', text)
+    text = _LINK_RE.sub(r'\1', text)
 
     # Remove standalone URLs
-    text = re.sub(r'(?<!\]\()https?://\S+', '', text)
+    text = _URL_RE.sub('', text)
 
     # Remove fenced code markers but keep content inside
-    text = re.sub(r'```[a-zA-Z0-9\-]*\n', '\n', text)
+    text = _FENCED_RE.sub('\n', text)
     text = text.replace('```', '\n')
 
     # Remove inline code ticks but keep content
     text = text.replace('`', '')
 
     # Remove common markdown header characters but keep header text
-    text = re.sub(r'^#{1,6}\s+', '', text, flags=re.MULTILINE)
+    text = _HEADER_RE.sub('', text)
 
     # Remove excessive formatting characters (but preserve single * and _)
-    text = re.sub(r'[\*\_]{2,}', ' ', text)
+    text = _BOLD_RE.sub(' ', text)
     
     # Remove horizontal rules
-    text = re.sub(r'^[-*_]{3,}$', '', text, flags=re.MULTILINE)
+    text = _HR_RE.sub('', text)
 
     # Remove HTML tags
-    text = re.sub(r'<[^>]+>', '', text)
+    text = _HTML_TAG_RE.sub('', text)
     
     # Remove HTML entities
-    text = re.sub(r'&[a-z]+;', ' ', text, flags=re.IGNORECASE)
+    text = _HTML_ENTITY_RE.sub(' ', text)
 
     if preserve_structure:
         # Keep paragraph structure for TF-IDF and clustering
-        text = re.sub(r'\n\s*\n+', '\n\n', text)
+        text = _PARA_RE.sub('\n\n', text)
         # Normalize spaces within lines
-        text = re.sub(r'[ \t]+', ' ', text)
+        text = _SPACE_RE.sub(' ', text)
     else:
         # More aggressive normalization
-        text = re.sub(r'\s+', ' ', text)
+        text = _ALL_WS_RE.sub(' ', text)
     
     text = text.strip()
 
