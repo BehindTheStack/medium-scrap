@@ -1,17 +1,18 @@
 """HTTP transport abstraction to make adapters testable and pluggable.
 
 Provides a simple interface with `post` and `get` methods. The default
-implementation wraps httpx but tests can inject a mock transport.
+implementation uses curl-cffi which impersonates Chrome's TLS fingerprint
+to avoid anti-bot detection.
 """
 from __future__ import annotations
 
 from typing import Any, Dict, Optional
-import httpx
+from curl_cffi import requests as curl_requests
 
 
 class HTTPTransport:
     """Abstract transport interface. Concrete transports should implement
-    `post` and `get` with compatible signatures returning httpx.Response-like objects.
+    `post` and `get` with compatible signatures returning Response-like objects.
     """
 
     def post(self, url: str, headers: Dict[str, str], json: Dict[str, Any], timeout: float = 30.0):
@@ -22,27 +23,32 @@ class HTTPTransport:
 
 
 class HttpxTransport(HTTPTransport):
-    """httpx-based transport implementation."""
+    """curl-cffi based transport that impersonates Chrome to bypass anti-bot detection."""
+
+    def _filter_headers(self, headers: Dict[str, str]) -> Dict[str, str]:
+        """Remove headers that conflict with impersonation (curl-cffi sets these automatically)."""
+        skip_keys = {'user-agent', 'accept-encoding', 'accept-language'}
+        return {k: v for k, v in headers.items() if k.lower() not in skip_keys}
 
     def post(self, url: str, headers: Dict[str, str], json: Dict[str, Any], timeout: float = 30.0):
-        # If tests have patched httpx.Client (e.g. replaced by MagicMock) it may not
-        # behave like the real class. Detect that and prefer the client context
-        # manager so tests mocking httpx.Client are respected.
-        try:
-            if not hasattr(httpx.Client, "__mro__"):
-                with httpx.Client(verify=False, timeout=timeout) as client:
-                    return client.post(url, headers=headers, json=json)
-
-            # Prefer the top-level helper (httpx.post) which is convenient for simple test mocking.
-            return httpx.post(url, headers=headers, json=json, verify=False, timeout=timeout)
-        except Exception:
-            # Fallback to client context manager as a last resort.
-            with httpx.Client(verify=False, timeout=timeout) as client:
-                return client.post(url, headers=headers, json=json)
+        return curl_requests.post(
+            url,
+            headers=self._filter_headers(headers),
+            json=json,
+            impersonate="chrome",
+            verify=False,
+            timeout=timeout
+        )
 
     def get(self, url: str, headers: Dict[str, str], follow_redirects: bool = True, timeout: float = 30.0):
-        with httpx.Client(verify=False, timeout=timeout, follow_redirects=follow_redirects) as client:
-            return client.get(url, headers=headers)
+        return curl_requests.get(
+            url,
+            headers=self._filter_headers(headers),
+            impersonate="chrome",
+            verify=False,
+            timeout=timeout,
+            allow_redirects=follow_redirects
+        )
 
 
 __all__ = ["HTTPTransport", "HttpxTransport"]
