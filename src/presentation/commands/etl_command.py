@@ -1160,8 +1160,10 @@ def _build_timeline_structure(
     all_techs = []
     all_patterns = []
     for e in entries:
-        all_techs.extend([t['name'] for t in e.get('tech_stack', [])])
-        all_patterns.extend([p['pattern'] for p in e.get('patterns', [])])
+        tech_stack = e.get('tech_stack') or []
+        patterns = e.get('patterns') or []
+        all_techs.extend([t['name'] for t in tech_stack if t])
+        all_patterns.extend([p['pattern'] for p in patterns if p])
     
     tech_counter = Counter(all_techs)
     pattern_counter = Counter(all_patterns)

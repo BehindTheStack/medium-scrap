@@ -476,6 +476,13 @@ class MediumApiAdapter(PostRepository):
                         id
                         title
                         uniqueSlug
+                        canonicalUrl
+                        tags {
+                            id
+                            displayTitle
+                            normalizedTagSlug
+                        }
+                        clapCount
                         firstPublishedAt
                         latestPublishedAt
                         readingTime
@@ -617,8 +624,8 @@ class MediumApiAdapter(PostRepository):
             latest_published_at=latest_published_at,
             # Populate optional metadata when available
             url=post_data.get('canonicalUrl') or f"https://medium.com/p/{post_data.get('id')}",
-            tags=post_data.get('tags') or [],
-            claps=(post_data.get('virtuals') or {}).get('totalClapCount')
+            tags=[t.get('displayTitle') or t.get('normalizedTagSlug', '') for t in (post_data.get('tags') or [])],
+            claps=post_data.get('clapCount') or (post_data.get('virtuals') or {}).get('totalClapCount')
         )
 
     def fetch_post_html(self, post: Post, config: PublicationConfig) -> Optional[str]:
