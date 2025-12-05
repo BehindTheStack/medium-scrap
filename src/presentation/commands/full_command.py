@@ -315,9 +315,18 @@ def _collect_posts(
         cfg_svc = PublicationConfigService(pub_repo)
         use_case = ScrapePostsUseCase(svc, cfg_svc, sess_repo)
         
+        # Get the actual publication name from YAML config
+        config_manager = SourceConfigManager()
+        try:
+            source_config = config_manager.get_source(source)
+            publication_name = source_config.get_publication_name()
+        except KeyError:
+            # Fallback to source key if not in YAML
+            publication_name = source
+        
         # Execute scraping
         req = ScrapePostsRequest(
-            publication_name=source,
+            publication_name=publication_name,
             limit=limit,
             auto_discover=True,
             skip_session=True,
