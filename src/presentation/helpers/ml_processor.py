@@ -1,6 +1,10 @@
 """
 ML Processing Logic
 Handles all machine learning extraction operations
+
+Supports two extraction modes:
+1. Legacy: BERT NER + n-grams + QA (original approach)
+2. Modern: GLiNER + Semantic Patterns + Optional LLM (2024 approach)
 """
 
 import re
@@ -678,3 +682,223 @@ class MLProcessor:
             save_callback(entry['id'], ml_data)
         
         self.console.print(f"[green]  ✓ Saved {len(batch)} posts[/green]")
+
+
+class ModernMLProcessor:
+    """
+    Modern ML Processor using hybrid extraction pipeline (2024 approach)
+    
+    Uses:
+    - GLiNER: Zero-shot NER for custom technical entities
+    - Semantic Pattern Classification: Embedding-based architecture detection
+    - Optional LLM: Deep extraction via Ollama (Qwen2.5-7B)
+    
+    Much better than legacy BERT NER for technical content.
+    """
+    
+    def __init__(self, console: Console):
+        self.console = console
+        self.pipeline = None
+        self._loaded = False
+        
+    def load_models(
+        self,
+        use_gliner: bool = True,
+        use_patterns: bool = True,
+        use_llm: bool = False,
+        llm_model: str = "qwen2.5:7b"
+    ) -> float:
+        """
+        Load the modern extraction pipeline.
+        
+        Args:
+            use_gliner: Enable GLiNER tech extraction
+            use_patterns: Enable pattern classification
+            use_llm: Enable LLM deep extraction (slower)
+            llm_model: Ollama model name
+            
+        Returns:
+            Loading time in seconds
+        """
+        if self._loaded:
+            return 0.0
+            
+        start_time = time.time()
+        
+        # Import the modern pipeline
+        ml_path = Path(__file__).parent.parent.parent / 'ml_classifier'
+        sys.path.insert(0, str(ml_path))
+        
+        from tech_extractor import TechExtractionPipeline
+        
+        self.console.print("[dim]Loading modern ML pipeline...[/dim]")
+        
+        self.pipeline = TechExtractionPipeline(
+            use_gliner=use_gliner,
+            use_patterns=use_patterns,
+            use_llm=use_llm,
+            llm_model=llm_model
+        )
+        
+        self._loaded = True
+        load_time = time.time() - start_time
+        
+        self.console.print(f"[dim]✓ Modern pipeline ready in {load_time:.1f}s[/dim]")
+        return load_time
+    
+    def process_posts(
+        self,
+        entries: List[Dict[str, Any]],
+        save_callback: Optional[Callable[[str, Dict], None]] = None,
+        use_llm: bool = False
+    ) -> Dict[str, Any]:
+        """
+        Process posts with modern hybrid extraction.
+        
+        Args:
+            entries: List of post entries
+            save_callback: Optional callback(post_id, ml_data) to save
+            use_llm: Enable LLM for deep extraction
+            
+        Returns:
+            Processing statistics
+        """
+        if not entries:
+            return {'total': 0}
+        
+        # Load models if needed
+        if not self._loaded:
+            self.load_models(use_llm=use_llm)
+        
+        from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeElapsedColumn
+        from tech_extractor import extraction_to_dict
+        
+        total_posts = len(entries)
+        
+        stats = {
+            'total': total_posts,
+            'tech_extracted': 0,
+            'patterns_detected': 0,
+            'problems_extracted': 0,
+            'total_tech_items': 0,
+            'total_patterns': 0
+        }
+        
+        self.console.print(f"\n[bold cyan]🔬 Modern ML Extraction ({total_posts} posts)[/bold cyan]")
+        self.console.print("[dim]Using: GLiNER + Semantic Patterns" + 
+                          (" + LLM" if use_llm else "") + "[/dim]\n")
+        
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            TextColumn("({task.completed}/{task.total})"),
+            TimeElapsedColumn(),
+            console=self.console
+        ) as progress:
+            task = progress.add_task("[cyan]Processing", total=total_posts)
+            
+            for entry in entries:
+                post_id = entry.get('id', '')
+                content = entry.get('content_markdown', '') or entry.get('content', '')
+                
+                if not content or len(content) < 100:
+                    progress.update(task, advance=1)
+                    continue
+                
+                # Extract using modern pipeline
+                result = self.pipeline.process(post_id, content)
+                
+                # Convert to legacy format for compatibility
+                entry['tech_stack'] = [
+                    {'name': t.name, 'type': t.category, 'score': t.confidence}
+                    for t in result.tech_stack
+                ]
+                entry['patterns'] = [
+                    {'pattern': p.name, 'confidence': p.confidence}
+                    for p in result.patterns
+                ]
+                entry['solutions'] = result.solutions
+                entry['problem'] = result.problems[0] if result.problems else None
+                entry['approach'] = result.key_decisions[0] if result.key_decisions else None
+                entry['layers'] = self._infer_layer_from_patterns(result.patterns)
+                
+                # Update stats
+                if result.tech_stack:
+                    stats['tech_extracted'] += 1
+                    stats['total_tech_items'] += len(result.tech_stack)
+                if result.patterns:
+                    stats['patterns_detected'] += 1
+                    stats['total_patterns'] += len(result.patterns)
+                if result.problems:
+                    stats['problems_extracted'] += 1
+                
+                # Save if callback provided
+                if save_callback:
+                    ml_data = {
+                        'layers': entry['layers'],
+                        'tech_stack': entry['tech_stack'],
+                        'patterns': entry['patterns'],
+                        'solutions': entry['solutions'],
+                        'problem': entry['problem'],
+                        'approach': entry['approach'],
+                    }
+                    save_callback(post_id, ml_data)
+                
+                progress.update(task, advance=1)
+        
+        # Print summary
+        self.console.print(f"\n[green]✅ Extraction Complete[/green]")
+        self.console.print(f"  📦 Tech Stack: {stats['total_tech_items']} items from {stats['tech_extracted']} posts")
+        self.console.print(f"  🏗️  Patterns: {stats['total_patterns']} detected in {stats['patterns_detected']} posts")
+        self.console.print(f"  ❓ Problems: {stats['problems_extracted']} posts")
+        
+        return stats
+    
+    def _infer_layer_from_patterns(self, patterns) -> List[str]:
+        """Infer architecture layer from detected patterns"""
+        if not patterns:
+            return ['General']
+        
+        # Map patterns to layers
+        pattern_to_layer = {
+            'Event Sourcing': 'Data & Events',
+            'CQRS': 'Data & Events',
+            'Microservices': 'Backend & APIs',
+            'Event-Driven Architecture': 'Streaming & Events',
+            'Data Mesh': 'Data & ML',
+            'Domain-Driven Design': 'Backend & APIs',
+            'Saga Pattern': 'Backend & APIs',
+            'Strangler Fig Pattern': 'Infrastructure',
+            'Circuit Breaker': 'Infrastructure',
+            'Service Mesh': 'Infrastructure',
+            'Stream Processing': 'Streaming & Events',
+            'Lambda Architecture': 'Data & ML',
+            'Kappa Architecture': 'Data & ML',
+            'Data Lake': 'Data & ML',
+            'Feature Store': 'Data & ML',
+            'MLOps': 'Data & ML',
+            'API Gateway Pattern': 'Backend & APIs',
+            'Sidecar Pattern': 'Infrastructure',
+            'Change Data Capture': 'Data & Events',
+            'Polyglot Persistence': 'Database & Storage',
+        }
+        
+        layers = []
+        for p in patterns:
+            pattern_name = p.name if hasattr(p, 'name') else p.get('pattern', '')
+            layer = pattern_to_layer.get(pattern_name)
+            if layer and layer not in layers:
+                layers.append(layer)
+        
+        return layers if layers else ['General']
+    
+    def _clear_gpu_cache(self):
+        """Clear GPU cache"""
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:
+            pass

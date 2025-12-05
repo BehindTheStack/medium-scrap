@@ -1,14 +1,20 @@
 """Reprocess ML Command for existing posts.
 
 This module provides a CLI command to reprocess existing posts from the
-database with the new ML discovery approach (NO hardcoded keywords):
+database with ML discovery approaches:
 
+LEGACY MODE (default):
 • Clustering → Layers
-• NER → Tech Stack  
+• NER (BERT) → Tech Stack  
 • NER+ngrams → Patterns (dynamic)
 • Embeddings → Solutions (semantic)
 • Q&A → Problem
 • Q&A → Approach
+
+MODERN MODE (--modern):
+• GLiNER → Zero-shot tech extraction
+• Semantic Embeddings → Architecture patterns
+• Optional LLM → Deep extraction (--use-llm)
 
 Author: BehindTheStack Team
 License: MIT
@@ -22,7 +28,7 @@ from rich.console import Console
 from rich.table import Table
 
 from src.infrastructure.pipeline_db import PipelineDB
-from src.presentation.helpers.ml_processor import MLProcessor
+from src.presentation.helpers.ml_processor import MLProcessor, ModernMLProcessor
 
 
 # Constants
@@ -70,6 +76,16 @@ SAVE_PROGRESS_INTERVAL = 10
     is_flag=True,
     help='Use legacy processing (all at once, slower)'
 )
+@click.option(
+    '--modern',
+    is_flag=True,
+    help='Use modern hybrid extraction (GLiNER + Semantic Patterns)'
+)
+@click.option(
+    '--use-llm',
+    is_flag=True,
+    help='Enable LLM extraction with --modern (requires Ollama)'
+)
 def reprocess_ml_command(
     source: Optional[str],
     all_sources: bool,
@@ -77,13 +93,20 @@ def reprocess_ml_command(
     force: bool,
     batch_size: int,
     technical_only: bool,
-    legacy: bool
+    legacy: bool,
+    modern: bool,
+    use_llm: bool
 ) -> None:
-    """Reprocess posts with OPTIMIZED ML discovery approach.
+    """Reprocess posts with ML discovery approach.
     
-    Uses hybrid approach for efficiency:
-    - Global clustering (TF-IDF needs all docs)
-    - Batch extractions (memory efficient)
+    Two modes available:
+    
+    DEFAULT: Legacy approach (BERT NER + n-grams + QA)
+    
+    --modern: Modern hybrid approach (2024):
+    - GLiNER for zero-shot tech extraction
+    - Semantic embeddings for pattern detection
+    - Optional LLM for deep extraction
     
     Args:
         source: Specific source name to reprocess
@@ -92,27 +115,29 @@ def reprocess_ml_command(
         force: Force reprocess even if already has ML data
         batch_size: Posts per batch for extraction (default: 50)
         legacy: Use old processing method (all at once)
+        modern: Use modern GLiNER + Semantic approach
+        use_llm: Enable LLM extraction (with --modern)
         
     Returns:
         None
         
     Examples:
-        # Reprocess one source (optimized)
+        # Reprocess one source (legacy)
         uv run python main.py reprocess-ml --source netflix
         
-        # With custom batch size
-        uv run python main.py reprocess-ml --source netflix --batch-size 100
+        # Modern extraction (recommended)
+        uv run python main.py reprocess-ml --source netflix --modern
         
-        # Force reprocess everything
-        uv run python main.py reprocess-ml --all --force
+        # Modern with LLM deep extraction
+        uv run python main.py reprocess-ml --source netflix --modern --use-llm
         
-        # Use legacy processing
-        uv run python main.py reprocess-ml --source netflix --legacy
+        # Force reprocess everything with modern
+        uv run python main.py reprocess-ml --all --force --modern
     """
     console = Console()
     db = PipelineDB()
     
-    _print_header(console, optimized=not legacy)
+    _print_header(console, optimized=not legacy, modern=modern)
     
     # Get available sources from database
     available_sources = _get_available_sources(db, console)
@@ -131,9 +156,13 @@ def reprocess_ml_command(
     
     console.print()
     
-    # Initialize ML processor
-    ml_processor = MLProcessor(console)
-    ml_processor.load_models()
+    # Initialize appropriate ML processor
+    if modern:
+        ml_processor = ModernMLProcessor(console)
+        ml_processor.load_models(use_llm=use_llm)
+    else:
+        ml_processor = MLProcessor(console)
+        ml_processor.load_models()
     
     # Process each source
     total_reprocessed, total_failed = _process_all_sources(
@@ -145,7 +174,9 @@ def reprocess_ml_command(
         limit,
         technical_only,
         use_optimized=not legacy,
-        batch_size=batch_size
+        batch_size=batch_size,
+        modern=modern,
+        use_llm=use_llm
     )
     
     # Final summary
@@ -157,13 +188,16 @@ def reprocess_ml_command(
     )
 
 
-def _print_header(console: Console, optimized: bool = True) -> None:
+def _print_header(console: Console, optimized: bool = True, modern: bool = False) -> None:
     """Print beautiful command header"""
     console.print()
     console.print("╔" + "═" * 78 + "╗", style="bold cyan")
     console.print("║" + " " * 78 + "║", style="bold cyan")
     
-    if optimized:
+    if modern:
+        title = "🔬 REPROCESS ML - Modern Hybrid Extraction (2024)"
+        subtitle = "  GLiNER + Semantic Patterns + Optional LLM"
+    elif optimized:
         title = "🚀 REPROCESS ML - Optimized Discovery (Hybrid Approach)"
         subtitle = "  Global Clustering + Batch Extraction"
     else:
@@ -264,27 +298,30 @@ def _determine_sources_to_process(
 def _process_all_sources(
     console: Console,
     db: PipelineDB,
-    ml_processor: MLProcessor,
+    ml_processor,
     sources: List[str],
     force: bool,
     limit: Optional[int],
     technical_only: bool,
     use_optimized: bool = True,
-    batch_size: int = 50
+    batch_size: int = 50,
+    modern: bool = False,
+    use_llm: bool = False
 ) -> tuple[int, int]:
     """Process all specified sources with ML.
     
     Args:
         console: Rich console for output
         db: Database instance
-        ml_processor: ML processor instance
+        ml_processor: ML processor instance (MLProcessor or ModernMLProcessor)
         sources: List of source names to process
         force: Whether to force reprocessing
         limit: Maximum posts per source
         technical_only: Process only technical posts
         use_optimized: Whether to use optimized batch processing
         batch_size: Posts per batch (for optimized mode)
-        limit: Optional limit on posts per source
+        modern: Use modern extraction pipeline
+        use_llm: Enable LLM extraction (with modern)
         
     Returns:
         Tuple of (total_reprocessed, total_failed)
@@ -328,7 +365,9 @@ def _process_all_sources(
             src,
             entries,
             use_optimized,
-            batch_size
+            batch_size,
+            modern=modern,
+            use_llm=use_llm
         )
         
         total_reprocessed += reprocessed
@@ -479,11 +518,13 @@ def _parse_published_date(published_at: Any) -> Optional[datetime]:
 def _process_source_with_ml(
     console: Console,
     db: PipelineDB,
-    ml_processor: MLProcessor,
+    ml_processor,
     source: str,
     entries: List[Dict[str, Any]],
     use_optimized: bool = True,
-    batch_size: int = 50
+    batch_size: int = 50,
+    modern: bool = False,
+    use_llm: bool = False
 ) -> tuple[int, int]:
     """Process single source with ML extraction.
     
@@ -495,11 +536,19 @@ def _process_source_with_ml(
         entries: List of entries to process
         use_optimized: Whether to use optimized batch processing
         batch_size: Posts per batch (for optimized mode)
+        modern: Use modern extraction pipeline
+        use_llm: Enable LLM extraction (with modern)
         
     Returns:
         Tuple of (reprocessed_count, failed_count)
     """
-    mode = "Optimized (Hybrid)" if use_optimized else "Legacy (Full)"
+    if modern:
+        mode = "Modern (GLiNER + Patterns" + (" + LLM)" if use_llm else ")")
+    elif use_optimized:
+        mode = "Optimized (Hybrid)"
+    else:
+        mode = "Legacy (Full)"
+        
     console.print(
         f"[cyan]🤖 Running ML discovery on "
         f"{len(entries)} posts ({mode})...[/cyan]"
@@ -511,7 +560,14 @@ def _process_source_with_ml(
         save_callback = _create_save_callback(console, db, len(entries))
         
         # Run ML processing with appropriate method
-        if use_optimized:
+        if modern:
+            # Use modern hybrid processor
+            ml_processor.process_posts(
+                entries,
+                save_callback=save_callback,
+                use_llm=use_llm
+            )
+        elif use_optimized:
             ml_processor.process_posts_optimized(
                 entries,
                 save_callback=save_callback,
