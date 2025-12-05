@@ -411,7 +411,9 @@ def _process_enrichment(
         try:
             md, assets, code_blocks = parsed
 
-            classification = content_extractor.classify_technical(html, code_blocks)
+            # Get tags from post_data for classification
+            post_tags = post_data.get('tags') or []
+            classification = content_extractor.classify_technical(html, code_blocks, tags=post_tags)
 
             # Clean text for ML processing
             text_only = re.sub(r'[#*`\[\]()]+', ' ', md)
@@ -509,9 +511,13 @@ def _enrich_single_post(
         
         # Convert to markdown and extract metadata
         md, assets, code_blocks = content_extractor.html_to_markdown(html)
+        
+        # Get tags from post_data for classification
+        post_tags = post_data.get('tags') or []
         classification = content_extractor.classify_technical(
             html,
-            code_blocks
+            code_blocks,
+            tags=post_tags
         )
         
         # Clean text for ML processing

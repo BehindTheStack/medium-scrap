@@ -185,64 +185,86 @@ def html_to_markdown(html: str) -> Tuple[str, List[Dict], List[Dict]]:
     return markdown, assets, code_blocks
 
 
-def classify_technical(html: str, code_blocks: List[dict]) -> dict:
-    """Simple heuristics-based technical classifier (keeps room for future ML).
+# Technical tags that indicate engineering content
+TECHNICAL_TAGS = {
+    # Programming languages
+    'python', 'javascript', 'java', 'golang', 'go', 'rust', 'typescript', 'kotlin',
+    'swift', 'scala', 'ruby', 'php', 'c++', 'cpp', 'c#', 'csharp', '.net',
+    # Frameworks & Libraries
+    'react', 'angular', 'vue', 'nodejs', 'node.js', 'django', 'flask', 'spring',
+    'rails', 'laravel', 'express', 'fastapi', 'nextjs', 'next.js',
+    # Data & ML
+    'machine learning', 'deep learning', 'artificial intelligence', 'ai', 'ml',
+    'data science', 'data engineering', 'big data', 'analytics', 'tensorflow',
+    'pytorch', 'pandas', 'numpy', 'scikit-learn', 'spark', 'hadoop', 'kafka',
+    'recommendation system', 'nlp', 'computer vision', 'neural network',
+    # Infrastructure & DevOps
+    'kubernetes', 'docker', 'aws', 'azure', 'gcp', 'cloud', 'devops', 'ci/cd',
+    'terraform', 'ansible', 'jenkins', 'github actions', 'microservices',
+    'serverless', 'lambda', 'containers', 'infrastructure',
+    # Databases
+    'sql', 'nosql', 'postgresql', 'mysql', 'mongodb', 'redis', 'elasticsearch',
+    'cassandra', 'dynamodb', 'database', 'graphql',
+    # Architecture & Patterns
+    'architecture', 'system design', 'distributed systems', 'scalability',
+    'performance', 'optimization', 'caching', 'load balancing', 'api',
+    'rest', 'grpc', 'event-driven', 'microservice',
+    # Security
+    'security', 'authentication', 'authorization', 'encryption', 'oauth',
+    # Mobile
+    'ios', 'android', 'mobile development', 'react native', 'flutter',
+    # Testing
+    'testing', 'unit testing', 'integration testing', 'tdd', 'automation',
+    # Other technical
+    'algorithm', 'data structure', 'open source', 'backend', 'frontend',
+    'full stack', 'web development', 'software engineering', 'engineering',
+    'technical', 'programming', 'coding', 'development', 'developer',
+}
+
+
+def classify_technical(html: str, code_blocks: List[dict], tags: List[str] = None) -> dict:
+    """Heuristics-based technical classifier using code blocks, keywords, and tags.
+
+    Args:
+        html: HTML content of the post
+        code_blocks: List of extracted code blocks
+        tags: Optional list of post tags from Medium API
 
     Returns: {'is_technical': bool, 'score': float, 'reasons': List[str]}
     """
     reasons: List[str] = []
     score = 0.0
+    tags = tags or []
 
-    if code_blocks:
-        reasons.append(f'code_blocks:{len(code_blocks)}')
-        score += min(0.6, 0.2 * len(code_blocks)) + 0.4
-
-    keywords = ['import ', 'def ', 'class ', 'function ', 'console.log', 'select ']  # simple set
-    found = 0
-    low_html = html.lower()
-    for kw in keywords:
-        if kw in low_html:
-            found += 1
-    if found:
-        reasons.append(f'keywords:{found}')
-        score += min(0.4, 0.1 * found)
-
-    score = max(0.0, min(1.0, score))
-    return {'is_technical': score >= 0.3, 'score': round(score, 2), 'reasons': reasons}
-
-
-__all__ = ['html_to_markdown', 'extract_code_blocks', 'classify_technical']
-
-def classify_technical(html: str, code_blocks: List[dict]) -> dict:
-    """Simple heuristics-based technical classifier.
-
-    - If there are code blocks, it's likely technical.
-    - Look for technical keywords to boost score.
-
-    Returns: {'is_technical': bool, 'score': float, 'reasons': List[str]}
-    """
-    reasons: List[str] = []
-    score = 0.0
-
-    # Code blocks presence
+    # 1. Code blocks presence (strong signal)
     if code_blocks:
         reasons.append(f"code_blocks:{len(code_blocks)}")
         score += min(0.6, 0.2 * len(code_blocks)) + 0.4
 
-    # Keyword heuristics
-    keywords = ['import ', 'def ', 'class ', 'function ', 'console.log', 'SELECT ', 'SELECT\n']
+    # 2. Technical tags (strong signal)
+    if tags:
+        normalized_tags = [t.lower().strip() for t in tags]
+        matching_tags = [t for t in normalized_tags if t in TECHNICAL_TAGS]
+        if matching_tags:
+            reasons.append(f"tech_tags:{matching_tags[:3]}")
+            score += min(0.5, 0.15 * len(matching_tags))
+
+    # 3. Keyword heuristics in content (weaker signal)
+    keywords = ['import ', 'def ', 'class ', 'function ', 'console.log', 'SELECT ', 'const ', 'let ', 'var ']
     found_kw = 0
+    low_html = html.lower()
     for kw in keywords:
-        if kw.lower() in html.lower():
+        if kw.lower() in low_html:
             found_kw += 1
     if found_kw:
         reasons.append(f"keywords:{found_kw}")
-        score += min(0.4, 0.1 * found_kw)
+        score += min(0.3, 0.08 * found_kw)
 
     # Normalize score
     score = max(0.0, min(1.0, score))
-    is_tech = score >= 0.3
+    is_tech = score >= 0.25  # Lowered threshold since tags are reliable
 
     return {"is_technical": is_tech, "score": round(score, 2), "reasons": reasons}
 
-__all__.append("classify_technical")
+
+__all__ = ['html_to_markdown', 'extract_code_blocks', 'classify_technical']
