@@ -24,7 +24,11 @@ from src.infrastructure.content_extractor import (
     classify_technical
 )
 from src.infrastructure.adapters.medium_api_adapter import MediumApiAdapter
-from src.infrastructure.http_transport import HttpxTransport
+from src.infrastructure.external.repositories import InMemoryPublicationRepository, MediumSessionRepository
+from src.application.services.publication_service import PublicationConfigService
+from src.application.services.post_discovery_service import PostDiscoveryService
+from src.application.use_cases.scrape_posts import ScrapePostsUseCase, ScrapePostsRequest
+from src.domain.post_discovery import COLLECTION_MODE
 
 
 @click.command('collect')
@@ -106,11 +110,11 @@ def collect_command(
     
     # Determine which sources to process
     if all_sources:
-        sources_to_collect = list(source_manager.get_all_sources().keys())
+        sources_to_collect = list(source_manager.list_sources().keys())
         console.print(f"[cyan]📋 Collecting from all {len(sources_to_collect)} sources[/cyan]")
     else:
-        if not source_manager.has_source(source):
-            available = ', '.join(source_manager.get_all_sources().keys())
+        if not source_manager.validate_source(source):
+            available = ', '.join(source_manager.list_sources().keys())
             console.print(f"[red]❌ Source '{source}' not found in configuration[/red]")
             console.print(f"[dim]Available sources: {available}[/dim]")
             return
@@ -124,8 +128,6 @@ def collect_command(
     
     # Initialize services
     db = PipelineDB()
-    transport = HttpxTransport()
-    api = MediumApiAdapter(transport)
     
     # Process each source
     total_stats = {
@@ -148,7 +150,6 @@ def collect_command(
         stats = _collect_posts(
             console=console,
             db=db,
-            api=api,
             source_key=source_key,
             source_config=source_config,
             limit=limit,
@@ -188,7 +189,6 @@ def _print_header(console: Console) -> None:
 def _collect_posts(
     console: Console,
     db: PipelineDB,
-    api: MediumApiAdapter,
     source_key: str,
     source_config,
     limit: Optional[int],
@@ -210,86 +210,81 @@ def _collect_posts(
     
     console.print(f"[cyan]🔍 Fetching posts from publication: {publication_name}[/cyan]")
     
-    # Fetch posts from API
+    # Fetch posts using the use case
     try:
-        posts = api.fetch_publication_posts(publication_name, limit=limit)
+        # Setup repositories and services
+        post_repo = MediumApiAdapter()
+        pub_repo = InMemoryPublicationRepository()
+        sess_repo = MediumSessionRepository()
+        
+        svc = PostDiscoveryService(post_repo)
+        cfg_svc = PublicationConfigService(pub_repo)
+        use_case = ScrapePostsUseCase(svc, cfg_svc, sess_repo)
+        
+        # Execute scraping
+        req = ScrapePostsRequest(
+            publication_name=publication_name,
+            limit=limit,
+            auto_discover=True,
+            skip_session=True,
+            mode=COLLECTION_MODE
+        )
+        resp = use_case.execute(req)
+        
+        if not resp.success or not resp.posts:
+            console.print("[yellow]⚠ No posts found[/yellow]")
+            return stats
+        
+        posts = resp.posts
         console.print(f"[green]✓ Found {len(posts)} posts[/green]")
+        
     except Exception as e:
         console.print(f"[red]❌ Failed to fetch posts: {e}[/red]")
         return stats
     
-    if not posts:
-        console.print("[yellow]⚠ No posts found[/yellow]")
-        return stats
-    
     console.print()
-    console.print(f"[cyan]📝 Processing {len(posts)} posts...[/cyan]")
+    console.print(f"[cyan]📝 Saving {len(posts)} posts to database...[/cyan]")
     
-    # Process posts with progress bar
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-        TextColumn("({task.completed}/{task.total})"),
-        TimeElapsedColumn(),
-        console=console
-    ) as progress:
-        task = progress.add_task("[cyan]Processing", total=len(posts))
-        
-        for post in posts:
-            try:
-                # Check if post exists
-                existing = db.get_post(post['id'])
-                
-                if existing and not update:
-                    progress.update(task, advance=1)
-                    continue
-                
-                # Extract content
-                if post.get('content', {}).get('bodyModel'):
-                    html_content = api.render_post_html(post['content']['bodyModel'])
-                    markdown_content, _, code_blocks = html_to_markdown(html_content)
-                    is_technical = classify_technical(
-                        html_content,
-                        code_blocks,
-                        tags=post.get('tags', [])
-                    )
-                else:
-                    markdown_content = None
-                    is_technical = False
-                
-                # Prepare post data
-                post_data = {
-                    'id': post['id'],
-                    'title': post.get('title', ''),
-                    'subtitle': post.get('content', {}).get('subtitle', ''),
-                    'url': f"https://medium.com/p/{post['id']}",
-                    'published_at': post.get('firstPublishedAt'),
-                    'updated_at': post.get('latestPublishedAt'),
-                    'author': post.get('creator', {}).get('name', ''),
-                    'author_id': post.get('creator', {}).get('id', ''),
-                    'tags': post.get('tags', []),
-                    'claps': post.get('clapCount', 0),
-                    'reading_time': post.get('readingTime', 0),
-                    'source': source_key,
-                    'content_markdown': markdown_content,
-                    'is_technical': is_technical
-                }
-                
-                # Save or update
-                if existing:
-                    db.update_post(post['id'], post_data)
-                    stats['updated'] += 1
-                else:
-                    db.save_post(post_data)
-                    stats['collected'] += 1
-                
-            except Exception as e:
-                console.print(f"[red]Error processing post {post.get('id')}: {e}[/red]")
-                stats['failed'] += 1
+    # Save posts to database
+    for post in posts:
+        try:
+            post_id = post.id.value
+            existing = db.post_exists(post_id)
             
-            progress.update(task, advance=1)
+            # Skip if exists and not updating
+            if existing and not update:
+                stats['updated'] += 1
+                continue
+            
+            # Create post data dict from domain object
+            post_data = {
+                'id': post_id,
+                'title': post.title,
+                'subtitle': post.subtitle or '',
+                'url': post.url or f"https://medium.com/p/{post_id}",
+                'published_at': post.published_at.isoformat() if post.published_at else None,
+                'updated_at': post.updated_at.isoformat() if post.updated_at else None,
+                'author': post.author.name if post.author else '',
+                'author_id': post.author.id.value if post.author and post.author.id else '',
+                'tags': [tag.display_title for tag in post.tags] if post.tags else [],
+                'claps': post.claps or 0,
+                'reading_time': post.reading_time or 0,
+                'source': source_key,
+                'content_markdown': None,  # Will be enriched later
+                'is_technical': False  # Will be classified later
+            }
+            
+            # Save or update
+            db.add_or_update_post(post_data)
+            
+            if existing:
+                stats['updated'] += 1
+            else:
+                stats['collected'] += 1
+                
+        except Exception as e:
+            console.print(f"[red]Error saving post {post.id.value}: {e}[/red]")
+            stats['failed'] += 1
     
     # Print source summary
     console.print()
