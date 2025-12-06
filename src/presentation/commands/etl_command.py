@@ -588,9 +588,28 @@ def _create_post_entity(post_data: Dict[str, Any]) -> Post:
     """
     author_name = post_data.get('author') or 'Unknown'
     
-    slug = post_data['id']
+    # Extract slug from URL
+    slug = ''
     if post_data.get('url'):
-        slug = post_data['url'].split('/')[-1]
+        url_parts = post_data['url'].rstrip('/').split('/')
+        if url_parts:
+            slug = url_parts[-1]
+    
+    # If no slug from URL or slug is just the ID, generate a slug
+    if not slug or not slug.strip():
+        # Generate slug from title or use ID as fallback
+        title = post_data.get('title', '').strip()
+        if title:
+            # Create slug from title (first 50 chars, replace spaces with hyphens)
+            slug = title[:50].lower().replace(' ', '-').replace('_', '-')
+            # Remove special characters except hyphens
+            slug = ''.join(c for c in slug if c.isalnum() or c == '-')
+            # Remove multiple consecutive hyphens
+            slug = '-'.join(filter(None, slug.split('-')))
+        
+        # If still no slug, use ID
+        if not slug:
+            slug = post_data['id']
     
     return Post(
         id=PostId(post_data['id']),
