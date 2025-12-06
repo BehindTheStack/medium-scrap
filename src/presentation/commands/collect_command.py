@@ -25,10 +25,12 @@ from src.infrastructure.content_extractor import (
 )
 from src.infrastructure.adapters.medium_api_adapter import MediumApiAdapter
 from src.infrastructure.external.repositories import InMemoryPublicationRepository, MediumSessionRepository
-from src.application.services.publication_service import PublicationConfigService
-from src.application.services.post_discovery_service import PostDiscoveryService
+from src.domain.services.publication_service import PostDiscoveryService, PublicationConfigService
 from src.application.use_cases.scrape_posts import ScrapePostsUseCase, ScrapePostsRequest
-from src.domain.post_discovery import COLLECTION_MODE
+
+
+# Collection mode for posts
+COLLECTION_MODE = 'metadata'
 
 
 @click.command('collect')
