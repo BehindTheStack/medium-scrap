@@ -6,6 +6,7 @@ Clean routing to modular commands
 import click
 
 # Import commands
+from .commands.collect_command import collect_command
 from .commands.reprocess_ml_command import reprocess_ml_command
 from .commands.full_command import full_command
 from .commands.etl_command import etl_command
@@ -19,6 +20,7 @@ def cli():
 
 
 # Register commands
+cli.add_command(collect_command)
 cli.add_command(full_command)
 cli.add_command(etl_command)
 cli.add_command(reprocess_ml_command)
