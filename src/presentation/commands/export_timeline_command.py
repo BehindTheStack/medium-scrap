@@ -90,7 +90,7 @@ def export_timeline_command(
     """Export Timeline with Complete ML Discovery Data.
     
     IMPORTANT: Run 'reprocess-ml' FIRST to classify posts with ML!
-    This command exports ONLY posts with ml_classified=1.
+    This command exports ONLY posts that have ML discovery records.
     
     Export timeline JSON with all ML discoveries:
     - Layers (clustering)
@@ -207,10 +207,11 @@ def _check_ml_status(
         cursor = conn.cursor()
         cursor.execute("""
             SELECT 
-                COUNT(*) as total,
-                SUM(CASE WHEN ml_classified = 1 THEN 1 ELSE 0 END) as with_ml
-            FROM posts 
-            WHERE content_markdown IS NOT NULL
+                COUNT(DISTINCT p.id) as total,
+                COUNT(DISTINCT CASE WHEN md.id IS NOT NULL THEN p.id END) as with_ml
+            FROM posts p
+            LEFT JOIN ml_discoveries md ON p.id = md.post_id
+            WHERE p.content_markdown IS NOT NULL
         """)
         row = cursor.fetchone()
         total_posts = row['total']
@@ -492,22 +493,58 @@ def _get_ml_classified_posts(
         technical_only: Get only technical posts
         
     Returns:
-        List of post dictionaries
+        List of post dictionaries with ML discovery data
     """
     with db._get_connection() as conn:
         cursor = conn.cursor()
         
+        # Get posts with their best ML discovery (prioritize modern-llm > modern > legacy)
         query = """
-            SELECT * FROM posts 
-            WHERE source = ? 
-            AND content_markdown IS NOT NULL
-            AND ml_classified = 1
+            SELECT 
+                p.*,
+                md.layers as ml_layers,
+                md.tech_stack,
+                md.patterns,
+                md.solutions,
+                md.problem,
+                md.approach,
+                md.model_version,
+                md.pipeline_type,
+                md.discovered_at as ml_discovered_at
+            FROM posts p
+            INNER JOIN (
+                SELECT 
+                    post_id,
+                    layers,
+                    tech_stack,
+                    patterns,
+                    solutions,
+                    problem,
+                    approach,
+                    model_version,
+                    pipeline_type,
+                    discovered_at,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY post_id 
+                        ORDER BY 
+                            CASE model_version
+                                WHEN 'modern-llm-v1' THEN 1
+                                WHEN 'modern-v1' THEN 2
+                                WHEN 'legacy-v1' THEN 3
+                                ELSE 4
+                            END,
+                            discovered_at DESC
+                    ) as rn
+                FROM ml_discoveries
+            ) md ON p.id = md.post_id AND md.rn = 1
+            WHERE p.source = ? 
+            AND p.content_markdown IS NOT NULL
         """
         
         if technical_only:
-            query += " AND is_technical = 1"
+            query += " AND p.is_technical = 1"
         
-        query += " ORDER BY published_at DESC"
+        query += " ORDER BY p.published_at DESC"
         
         cursor.execute(query, (source,))
         return [dict(row) for row in cursor.fetchall()]
@@ -520,7 +557,7 @@ def _build_entries_from_posts(
     """Build timeline entries from posts.
     
     Args:
-        posts: List of post dictionaries
+        posts: List of post dictionaries with ML discovery data
         source: Optional source name (for combined mode)
         
     Returns:
@@ -536,7 +573,7 @@ def _build_entries_from_posts(
         date = _parse_published_date(post.get('published_at'))
         snippet = _extract_snippet_from_markdown(md)
         
-        # Parse ML data
+        # Build ML data from ml_discoveries fields (already joined in query)
         ml_data = {
             'layers': _parse_json_field(post.get('ml_layers')) or [],
             'tech_stack': _parse_json_field(post.get('tech_stack')) or [],
@@ -544,7 +581,8 @@ def _build_entries_from_posts(
             'solutions': _parse_json_field(post.get('solutions')) or [],
             'problem': post.get('problem'),
             'approach': post.get('approach'),
-            'ml_classified': bool(post.get('ml_classified', 0)),
+            'model_version': post.get('model_version'),
+            'pipeline_type': post.get('pipeline_type'),
         }
         
         entry = {
@@ -799,7 +837,8 @@ def _aggregate_ml_statistics(
     
     for e in entries:
         ml = e['ml_discovery']
-        if ml['ml_classified']:
+        # Consider ML classified if has tech_stack or layers
+        if ml.get('tech_stack') or ml.get('layers'):
             posts_with_ml += 1
         
         all_techs.extend([t['name'] for t in ml.get('tech_stack', [])])

@@ -214,7 +214,11 @@ def _collect_posts(
     
     # Fetch posts using the use case
     try:
-        # Setup repositories and services
+        # Add small delay to avoid rate limiting
+        import time as time_module
+        time_module.sleep(0.5)
+        
+        # Setup repositories and services (fresh instances for each source)
         post_repo = MediumApiAdapter()
         pub_repo = InMemoryPublicationRepository()
         sess_repo = MediumSessionRepository()
@@ -234,14 +238,23 @@ def _collect_posts(
         resp = use_case.execute(req)
         
         if not resp.success or not resp.posts:
-            console.print("[yellow]⚠ No posts found[/yellow]")
+            if resp.total_posts_found > 0:
+                console.print(f"[yellow]⚠ API found {resp.total_posts_found} posts but none were retrieved[/yellow]")
+                console.print(f"[dim]  Discovery method: {resp.discovery_method}[/dim]")
+                if resp.error_message:
+                    console.print(f"[dim]  Error: {resp.error_message}[/dim]")
+            else:
+                error_detail = f" - {resp.error_message}" if resp.error_message else ""
+                console.print(f"[yellow]⚠ No posts found{error_detail}[/yellow]")
             return stats
         
         posts = resp.posts
         console.print(f"[green]✓ Found {len(posts)} posts[/green]")
         
     except Exception as e:
+        import traceback
         console.print(f"[red]❌ Failed to fetch posts: {e}[/red]")
+        console.print(f"[dim]{traceback.format_exc()}[/dim]")
         return stats
     
     console.print()

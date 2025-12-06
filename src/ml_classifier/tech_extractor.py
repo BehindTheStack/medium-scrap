@@ -453,7 +453,7 @@ Extract as JSON with these exact fields:
 
 Return ONLY valid JSON, no markdown or explanation."""
 
-    def __init__(self, model: str = "qwen2.5:7b"):
+    def __init__(self, model: str = "qwen2.5:14b"):
         """
         Initialize LLM extractor.
         

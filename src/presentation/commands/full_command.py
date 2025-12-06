@@ -438,8 +438,7 @@ def _create_post_dict(source: str, post: Any) -> Dict[str, Any]:
         'reading_time': getattr(post, 'reading_time', 0),
         'claps': getattr(post, 'claps', None),
         'tags': getattr(post, 'tags', []) or [],
-        'collection_mode': COLLECTION_MODE,
-        'has_markdown': False
+        'collection_mode': COLLECTION_MODE
     }
 
 

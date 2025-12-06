@@ -16,8 +16,7 @@ class PipelineDB:
     def __init__(self, db_path: str = "outputs/pipeline.db"):
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._init_db()
-        self._migrate_db()  # Run migrations
+        self._ensure_schema()  # Ensure schema exists (migration-aware)
     
     @contextmanager
     def _get_connection(self):
@@ -41,49 +40,88 @@ class PipelineDB:
         finally:
             conn.close()
     
-    def _migrate_db(self):
-        """Apply database migrations"""
+    def _ensure_schema(self):
+        """Ensure database schema exists (migration-aware)"""
         with self._get_connection() as conn:
             cursor = conn.cursor()
             
-            # Check if content columns exist
-            cursor.execute("PRAGMA table_info(posts)")
-            columns = [row[1] for row in cursor.fetchall()]
-            
-            # Add new content columns if they don't exist
-            if 'content_html' not in columns:
-                cursor.execute("ALTER TABLE posts ADD COLUMN content_html TEXT")
-            if 'content_markdown' not in columns:
-                cursor.execute("ALTER TABLE posts ADD COLUMN content_markdown TEXT")
-            if 'content_text' not in columns:
-                cursor.execute("ALTER TABLE posts ADD COLUMN content_text TEXT")
-            if 'metadata_json' not in columns:
-                cursor.execute("ALTER TABLE posts ADD COLUMN metadata_json TEXT")
-            
-            # Add ML discovery columns (NEW)
-            if 'tech_stack' not in columns:
-                cursor.execute("ALTER TABLE posts ADD COLUMN tech_stack TEXT")  # JSON array
-            if 'patterns' not in columns:
-                cursor.execute("ALTER TABLE posts ADD COLUMN patterns TEXT")  # JSON array
-            if 'solutions' not in columns:
-                cursor.execute("ALTER TABLE posts ADD COLUMN solutions TEXT")  # JSON array
-            if 'problem' not in columns:
-                cursor.execute("ALTER TABLE posts ADD COLUMN problem TEXT")
-            if 'approach' not in columns:
-                cursor.execute("ALTER TABLE posts ADD COLUMN approach TEXT")
-            
-            # Create index for content search (only after column exists)
+            # Check if schema_migrations table exists (migration 002 indicator)
             cursor.execute("""
-                CREATE INDEX IF NOT EXISTS idx_posts_has_content 
-                ON posts(content_markdown)
+                SELECT name FROM sqlite_master 
+                WHERE type='table' AND name='schema_migrations'
+            """)
+            has_migrations = cursor.fetchone() is not None
+            
+            if not has_migrations:
+                # Legacy database - run old init
+                self._init_db_legacy()
+            else:
+                # New schema from migration 002
+                # Just ensure supporting tables exist
+                self._ensure_supporting_tables()
+    
+    def _ensure_supporting_tables(self):
+        """Ensure supporting tables exist (collection_runs, timeline_builds, etc)"""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            
+            # These tables are not affected by migration 002
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS collection_runs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    source TEXT NOT NULL,
+                    started_at TEXT NOT NULL,
+                    completed_at TEXT,
+                    status TEXT,
+                    mode TEXT,
+                    posts_collected INTEGER DEFAULT 0,
+                    posts_new INTEGER DEFAULT 0,
+                    posts_updated INTEGER DEFAULT 0,
+                    error_message TEXT
+                )
+            """)
+            
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS timeline_builds (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    publication TEXT NOT NULL,
+                    built_at TEXT NOT NULL,
+                    post_count INTEGER,
+                    output_file TEXT,
+                    status TEXT
+                )
+            """)
+            
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS ml_runs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    run_type TEXT NOT NULL,
+                    started_at TEXT NOT NULL,
+                    completed_at TEXT,
+                    status TEXT,
+                    model_path TEXT,
+                    training_posts INTEGER,
+                    classified_posts INTEGER,
+                    accuracy REAL,
+                    error_message TEXT
+                )
+            """)
+            
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS cache (
+                    key TEXT PRIMARY KEY,
+                    value TEXT,
+                    created_at TEXT NOT NULL,
+                    expires_at TEXT
+                )
             """)
     
-    def _init_db(self):
-        """Initialize database schema"""
+    def _init_db_legacy(self):
+        """Initialize legacy database schema (pre-migration)"""
         with self._get_connection() as conn:
             cursor = conn.cursor()
             
-            # Posts table - tracks all collected posts
+            # Legacy Posts table - will be migrated by migration 002
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS posts (
                     id TEXT PRIMARY KEY,
@@ -232,17 +270,44 @@ class PipelineDB:
     
     def add_or_update_post(self, post_data: Dict[str, Any]) -> None:
         """Add new post or update existing one"""
-        now = datetime.utcnow().isoformat()
+        now_unix = int(datetime.utcnow().timestamp())
         
-        # Extract author name if it's a dict
-        author = post_data.get('author')
-        if isinstance(author, dict):
-            author = author.get('name', author.get('username', ''))
+        # Extract author info
+        author_name = None
+        author_username = None
+        if isinstance(post_data.get('author'), dict):
+            author_name = post_data['author'].get('name')
+            author_username = post_data['author'].get('username')
+        elif post_data.get('author'):
+            author_name = post_data['author']
+            author_username = author_name.lower().replace(' ', '_')
+        
+        # Convert published_at to Unix timestamp if it's ISO string
+        published_at = post_data.get('published_at')
+        if isinstance(published_at, str):
+            try:
+                dt = datetime.fromisoformat(published_at.replace('Z', '+00:00'))
+                published_at = int(dt.timestamp())
+            except:
+                published_at = None
         
         # Convert lists/dicts to JSON
         tags = json.dumps(post_data.get('tags', []))
-        ml_layers = json.dumps(post_data.get('ml_layers', []))
+        topics = json.dumps(post_data.get('topics', []))
+        code_languages = json.dumps(post_data.get('code_languages', []))
         metadata_json = json.dumps(post_data.get('metadata', {})) if post_data.get('metadata') else None
+        
+        # Calculate content length
+        content_text = post_data.get('content_text', '')
+        content_length = len(content_text) if content_text else 0
+        
+        # Extract slug from URL
+        url = post_data.get('url', '')
+        slug = None
+        if url and '/' in url:
+            slug = url.rstrip('/').split('/')[-1]
+        if not slug:
+            slug = post_data['id']
         
         with self._get_connection() as conn:
             cursor = conn.cursor()
@@ -251,104 +316,137 @@ class PipelineDB:
             exists = self.post_exists(post_data['id'])
             
             if exists:
-                # Update (including source and publication to fix legacy data)
+                # Update with new schema
                 cursor.execute("""
                     UPDATE posts SET
                         source = ?,
                         publication = ?,
                         title = ?,
-                        author = ?,
+                        subtitle = ?,
                         url = ?,
+                        slug = ?,
+                        author_name = ?,
+                        author_username = ?,
                         published_at = ?,
                         reading_time = ?,
                         claps = ?,
+                        responses = ?,
                         tags = ?,
+                        topics = ?,
                         content_html = ?,
                         content_markdown = ?,
                         content_text = ?,
+                        content_length = ?,
+                        featured_image_url = ?,
                         metadata_json = ?,
-                        last_updated = ?,
+                        updated_locally_at = ?,
                         collection_mode = ?,
-                        has_markdown = ?,
-                        has_json = ?,
-                        markdown_path = ?,
-                        json_path = ?,
                         is_technical = ?,
                         technical_score = ?,
                         code_blocks = ?,
-                        in_timeline = ?,
-                        ml_classified = ?,
-                        ml_layers = ?
+                        code_languages = ?
                     WHERE id = ?
                 """, (
                     post_data['source'],
                     post_data['publication'],
-                    post_data.get('title'),
-                    author,
-                    post_data.get('url'),
-                    post_data.get('published_at'),
-                    post_data.get('reading_time'),
-                    post_data.get('claps'),
+                    post_data.get('title', 'Untitled'),
+                    post_data.get('subtitle'),
+                    url,
+                    slug,
+                    author_name,
+                    author_username,
+                    published_at,
+                    post_data.get('reading_time', 0),
+                    post_data.get('claps', 0),
+                    post_data.get('responses', 0),
                     tags,
+                    topics,
                     post_data.get('content_html'),
                     post_data.get('content_markdown'),
-                    post_data.get('content_text'),
+                    content_text,
+                    content_length,
+                    post_data.get('featured_image_url'),
                     metadata_json,
-                    now,
-                    post_data.get('collection_mode'),
-                    post_data.get('has_markdown', False),
-                    post_data.get('has_json', False),
-                    post_data.get('markdown_path'),
-                    post_data.get('json_path'),
+                    now_unix,
+                    post_data.get('collection_mode', 'metadata'),
                     post_data.get('is_technical'),
                     post_data.get('technical_score'),
                     post_data.get('code_blocks', 0),
-                    post_data.get('in_timeline', False),
-                    post_data.get('ml_classified', False),
-                    ml_layers,
+                    code_languages,
                     post_data['id']
                 ))
             else:
-                # Insert
+                # Insert with new schema
                 cursor.execute("""
                     INSERT INTO posts (
-                        id, source, publication, title, author, url,
-                        published_at, reading_time, claps, tags,
-                        content_html, content_markdown, content_text, metadata_json,
-                        collected_at, last_updated, collection_mode,
-                        has_markdown, has_json, markdown_path, json_path,
-                        is_technical, technical_score, code_blocks,
-                        in_timeline, ml_classified, ml_layers
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        id, source, publication, title, subtitle, url, slug,
+                        author_name, author_username,
+                        published_at, reading_time, claps, responses,
+                        tags, topics,
+                        content_html, content_markdown, content_text, content_length,
+                        featured_image_url, metadata_json,
+                        collected_at, updated_locally_at, collection_mode,
+                        is_technical, technical_score, code_blocks, code_languages,
+                        created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     post_data['id'],
                     post_data['source'],
                     post_data['publication'],
-                    post_data.get('title'),
-                    author,
-                    post_data.get('url'),
-                    post_data.get('published_at'),
-                    post_data.get('reading_time'),
-                    post_data.get('claps'),
+                    post_data.get('title', 'Untitled'),
+                    post_data.get('subtitle'),
+                    url,
+                    slug,
+                    author_name,
+                    author_username,
+                    published_at,
+                    post_data.get('reading_time', 0),
+                    post_data.get('claps', 0),
+                    post_data.get('responses', 0),
                     tags,
+                    topics,
                     post_data.get('content_html'),
                     post_data.get('content_markdown'),
-                    post_data.get('content_text'),
+                    content_text,
+                    content_length,
+                    post_data.get('featured_image_url'),
                     metadata_json,
-                    now,
-                    now,
+                    now_unix,
+                    now_unix,
                     post_data.get('collection_mode', 'metadata'),
-                    post_data.get('has_markdown', False),
-                    post_data.get('has_json', False),
-                    post_data.get('markdown_path'),
-                    post_data.get('json_path'),
                     post_data.get('is_technical'),
                     post_data.get('technical_score'),
                     post_data.get('code_blocks', 0),
-                    post_data.get('in_timeline', False),
-                    post_data.get('ml_classified', False),
-                    ml_layers
+                    code_languages,
+                    now_unix
                 ))
+            
+            # Update or create author record
+            if author_name:
+                self._upsert_author(author_username or author_name, author_name)
+    
+    def _upsert_author(self, author_id: str, name: str) -> None:
+        """Insert or update author record"""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            now_unix = int(datetime.utcnow().timestamp())
+            
+            # Check if author exists
+            cursor.execute("SELECT id FROM authors WHERE id = ?", (author_id,))
+            exists = cursor.fetchone() is not None
+            
+            if exists:
+                cursor.execute("""
+                    UPDATE authors 
+                    SET name = ?, last_updated_at = ?
+                    WHERE id = ?
+                """, (name, now_unix, author_id))
+            else:
+                username = author_id if '@' not in author_id else author_id.split('@')[0]
+                cursor.execute("""
+                    INSERT INTO authors (id, name, username, first_seen_at, last_updated_at)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (author_id, name, username, now_unix, now_unix))
     
     def get_posts_by_source(self, source: str, with_markdown_only: bool = False) -> List[Dict]:
         """Get all posts for a source"""
@@ -358,7 +456,7 @@ class PipelineDB:
             if with_markdown_only:
                 cursor.execute("""
                     SELECT * FROM posts 
-                    WHERE source = ? AND has_markdown = 1
+                    WHERE source = ? AND content_markdown IS NOT NULL
                     ORDER BY published_at DESC
                 """, (source,))
             else:
@@ -378,19 +476,19 @@ class PipelineDB:
             if source:
                 cursor.execute("""
                     SELECT * FROM posts 
-                    WHERE source = ? AND has_markdown = 0
+                    WHERE source = ? AND content_markdown IS NULL
                 """, (source,))
             else:
                 cursor.execute("""
                     SELECT * FROM posts 
-                    WHERE has_markdown = 0
+                    WHERE content_markdown IS NULL
                 """)
             
             return [dict(row) for row in cursor.fetchall()]
     
-    def update_ml_discovery(self, post_id: str, ml_data: Dict[str, Any]) -> None:
+    def update_ml_discovery(self, post_id: str, ml_data: Dict[str, Any], model_version: str = 'legacy-v1', pipeline_type: str = 'legacy') -> None:
         """
-        Update ML discovery fields for a post.
+        Save ML discovery data for a post in ml_discoveries table.
         
         Args:
             post_id: Post ID
@@ -401,8 +499,12 @@ class PipelineDB:
                 - solutions: List[str] - Solution descriptions
                 - problem: str (optional) - Main problem addressed
                 - approach: str (optional) - Main approach taken
+                - embedding_vector: bytes (optional) - Vector for semantic search
+                - extraction_confidence: float (optional) - Overall confidence
+            model_version: Version identifier (e.g., 'modern-v1', 'legacy-v1')
+            pipeline_type: Type of pipeline ('legacy', 'modern', 'modern-llm')
         """
-        now = datetime.utcnow().isoformat()
+        now_unix = int(datetime.utcnow().timestamp())
         
         with self._get_connection() as conn:
             cursor = conn.cursor()
@@ -413,62 +515,91 @@ class PipelineDB:
             patterns_json = json.dumps(ml_data.get('patterns', []))
             solutions_json = json.dumps(ml_data.get('solutions', []))
             
+            # Check if discovery already exists for this version
             cursor.execute("""
-                UPDATE posts
-                SET 
-                    ml_layers = ?,
-                    tech_stack = ?,
-                    patterns = ?,
-                    solutions = ?,
-                    problem = ?,
-                    approach = ?,
-                    ml_classified = 1,
-                    ml_processed_at = ?
-                WHERE id = ?
-            """, (
-                layers_json,
-                tech_stack_json,
-                patterns_json,
-                solutions_json,
-                ml_data.get('problem'),
-                ml_data.get('approach'),
-                now,
-                post_id
-            ))
+                SELECT id FROM ml_discoveries 
+                WHERE post_id = ? AND model_version = ?
+            """, (post_id, model_version))
+            exists = cursor.fetchone()
+            
+            if exists:
+                # Update existing discovery
+                cursor.execute("""
+                    UPDATE ml_discoveries
+                    SET 
+                        pipeline_type = ?,
+                        processed_at = ?,
+                        layers = ?,
+                        tech_stack = ?,
+                        patterns = ?,
+                        solutions = ?,
+                        problem = ?,
+                        approach = ?,
+                        embedding_model = ?,
+                        embedding_vector = ?,
+                        extraction_confidence = ?
+                    WHERE post_id = ? AND model_version = ?
+                """, (
+                    pipeline_type,
+                    now_unix,
+                    layers_json,
+                    tech_stack_json,
+                    patterns_json,
+                    solutions_json,
+                    ml_data.get('problem'),
+                    ml_data.get('approach'),
+                    ml_data.get('embedding_model'),
+                    ml_data.get('embedding_vector'),
+                    ml_data.get('extraction_confidence', 0.5),
+                    post_id,
+                    model_version
+                ))
+            else:
+                # Insert new discovery
+                cursor.execute("""
+                    INSERT INTO ml_discoveries (
+                        post_id, model_version, pipeline_type, processed_at,
+                        layers, tech_stack, patterns, solutions, problem, approach,
+                        embedding_model, embedding_vector, extraction_confidence
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    post_id,
+                    model_version,
+                    pipeline_type,
+                    now_unix,
+                    layers_json,
+                    tech_stack_json,
+                    patterns_json,
+                    solutions_json,
+                    ml_data.get('problem'),
+                    ml_data.get('approach'),
+                    ml_data.get('embedding_model'),
+                    ml_data.get('embedding_vector'),
+                    ml_data.get('extraction_confidence', 0.5)
+                ))
     
-    def get_posts_needing_ml_classification(self) -> List[Dict]:
-        """Get posts with markdown but not ML classified"""
+    def get_posts_needing_ml_classification(self, model_version: str = 'legacy-v1') -> List[Dict]:
+        """Get posts with content but not yet classified by specified model version"""
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                SELECT * FROM posts 
-                WHERE has_markdown = 1 AND ml_classified = 0
-            """)
+                SELECT p.* FROM posts p
+                LEFT JOIN ml_discoveries md ON p.id = md.post_id AND md.model_version = ?
+                WHERE p.content_markdown IS NOT NULL 
+                AND md.id IS NULL
+            """, (model_version,))
             return [dict(row) for row in cursor.fetchall()]
     
-    def mark_posts_in_timeline(self, post_ids: List[str], publication: str) -> None:
-        """Mark posts as included in timeline"""
-        now = datetime.utcnow().isoformat()
+    def get_ml_discovery(self, post_id: str, model_version: str = 'legacy-v1') -> Optional[Dict]:
+        """Get ML discovery data for a specific post and model version"""
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            cursor.executemany("""
-                UPDATE posts 
-                SET in_timeline = 1, timeline_processed_at = ?
-                WHERE id = ?
-            """, [(now, pid) for pid in post_ids])
-    
-    def mark_posts_ml_classified(self, post_ids: List[str], layers_map: Dict[str, List[str]]) -> None:
-        """Mark posts as ML classified with their layers"""
-        now = datetime.utcnow().isoformat()
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            for post_id in post_ids:
-                layers = json.dumps(layers_map.get(post_id, []))
-                cursor.execute("""
-                    UPDATE posts 
-                    SET ml_classified = 1, ml_processed_at = ?, ml_layers = ?
-                    WHERE id = ?
-                """, (now, layers, post_id))
+            cursor.execute("""
+                SELECT * FROM ml_discoveries 
+                WHERE post_id = ? AND model_version = ?
+            """, (post_id, model_version))
+            row = cursor.fetchone()
+            return dict(row) if row else None
     
     # =========================================================================
     # Collection Runs
@@ -533,29 +664,29 @@ class PipelineDB:
             """)
             by_source = {row['source']: row['count'] for row in cursor.fetchall()}
             
-            # Posts with markdown
-            cursor.execute("SELECT COUNT(*) as count FROM posts WHERE has_markdown = 1")
+            # Posts with markdown content
+            cursor.execute("SELECT COUNT(*) as count FROM posts WHERE content_markdown IS NOT NULL")
             with_markdown = cursor.fetchone()['count']
             
-            # Posts in timeline
-            cursor.execute("SELECT COUNT(*) as count FROM posts WHERE in_timeline = 1")
-            in_timeline = cursor.fetchone()['count']
-            
-            # ML classified
-            cursor.execute("SELECT COUNT(*) as count FROM posts WHERE ml_classified = 1")
+            # Posts with ML discoveries
+            cursor.execute("SELECT COUNT(DISTINCT post_id) as count FROM ml_discoveries")
             ml_classified = cursor.fetchone()['count']
             
             # Technical posts
             cursor.execute("SELECT COUNT(*) as count FROM posts WHERE is_technical = 1")
             technical = cursor.fetchone()['count']
             
+            # Total authors
+            cursor.execute("SELECT COUNT(*) as count FROM authors")
+            total_authors = cursor.fetchone()['count']
+            
             return {
                 'total_posts': total,
                 'by_source': by_source,
                 'with_markdown': with_markdown,
-                'in_timeline': in_timeline,
                 'ml_classified': ml_classified,
                 'technical_posts': technical,
+                'total_authors': total_authors,
                 'needs_markdown': total - with_markdown,
                 'needs_ml': with_markdown - ml_classified
             }
@@ -663,24 +794,44 @@ class PipelineDB:
             return [dict(row) for row in cursor.fetchall()]
     
     def get_posts_needing_ml(self, source: Optional[str] = None,
-                            limit: Optional[int] = None) -> List[Dict]:
-        """Get posts that need ML processing (have content but not ML classified)"""
+                            limit: Optional[int] = None,
+                            model_version: Optional[str] = None) -> List[Dict]:
+        """Get posts that need ML processing (have content but no ML discovery)
+        
+        Args:
+            source: Filter by source name
+            limit: Limit number of results
+            model_version: Filter by posts not processed by this model version
+            
+        Returns:
+            List of post dictionaries
+        """
         with self._get_connection() as conn:
             cursor = conn.cursor()
             
             query = """
-                SELECT * FROM posts 
-                WHERE content_markdown IS NOT NULL
-                AND LENGTH(content_markdown) > 100
-                AND (ml_classified IS NULL OR ml_classified = 0)
+                SELECT p.* FROM posts p
+                LEFT JOIN ml_discoveries md ON p.id = md.post_id
             """
+            
+            if model_version:
+                query += " AND md.model_version = ?"
+            
+            query += """
+                WHERE p.content_markdown IS NOT NULL
+                AND LENGTH(p.content_markdown) > 100
+                AND md.post_id IS NULL
+            """
+            
             params = []
+            if model_version:
+                params.append(model_version)
             
             if source:
-                query += " AND source = ?"
+                query += " AND p.source = ?"
                 params.append(source)
             
-            query += " ORDER BY published_at DESC"
+            query += " ORDER BY p.published_at DESC"
             
             if limit:
                 query += " LIMIT ?"
@@ -691,10 +842,10 @@ class PipelineDB:
     
     def search_content(self, query: str, limit: int = 50) -> List[Dict]:
         """
-        Simple full-text search in post content
+        Full-text search in post content using FTS5
         
         Args:
-            query: Search term
+            query: Search term (supports FTS5 syntax)
             limit: Max results
         
         Returns:
@@ -703,17 +854,64 @@ class PipelineDB:
         with self._get_connection() as conn:
             cursor = conn.cursor()
             
-            # Simple LIKE search (could be improved with FTS5)
+            # Use FTS5 - post_id is stored directly in FTS table
             cursor.execute("""
-                SELECT id, source, title, author, url, published_at,
-                       SUBSTR(content_text, 1, 200) as snippet
-                FROM posts 
-                WHERE content_text LIKE ? OR title LIKE ?
-                ORDER BY published_at DESC
+                SELECT p.id, p.source, p.title, p.author_name, p.url, p.published_at,
+                       SUBSTR(p.content_text, 1, 200) as snippet
+                FROM posts_fts fts
+                JOIN posts p ON fts.post_id = p.id
+                WHERE posts_fts MATCH ?
+                ORDER BY rank
                 LIMIT ?
-            """, (f'%{query}%', f'%{query}%', limit))
+            """, (query, limit))
             
             return [dict(row) for row in cursor.fetchall()]
+    
+    # =========================================================================
+    # Authors Management
+    # =========================================================================
+    
+    def get_author(self, author_id: str) -> Optional[Dict]:
+        """Get author by ID"""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM authors WHERE id = ?", (author_id,))
+            row = cursor.fetchone()
+            return dict(row) if row else None
+    
+    def get_top_authors(self, limit: int = 10, technical_only: bool = False) -> List[Dict]:
+        """Get top authors by post count"""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            
+            order_by = "technical_posts_count" if technical_only else "posts_count"
+            cursor.execute(f"""
+                SELECT * FROM authors 
+                WHERE {order_by} > 0
+                ORDER BY {order_by} DESC 
+                LIMIT ?
+            """, (limit,))
+            
+            return [dict(row) for row in cursor.fetchall()]
+    
+    def update_author_stats(self) -> None:
+        """Recalculate author statistics from posts"""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            
+            # Update posts count
+            cursor.execute("""
+                UPDATE authors
+                SET posts_count = (
+                    SELECT COUNT(*) FROM posts 
+                    WHERE posts.author_username = authors.username
+                ),
+                technical_posts_count = (
+                    SELECT COUNT(*) FROM posts 
+                    WHERE posts.author_username = authors.username 
+                    AND posts.is_technical = 1
+                )
+            """)
 
 
 __all__ = ['PipelineDB']

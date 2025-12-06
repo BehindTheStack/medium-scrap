@@ -423,7 +423,6 @@ def _process_enrichment(
             post_data['content_html'] = html
             post_data['content_markdown'] = md
             post_data['content_text'] = clean_markdown(text_only)
-            post_data['has_markdown'] = True
             post_data['is_technical'] = classification.get('is_technical')
             post_data['technical_score'] = classification.get('score')
             post_data['code_blocks'] = len(code_blocks)
@@ -528,7 +527,6 @@ def _enrich_single_post(
         post_data['content_html'] = html
         post_data['content_markdown'] = md
         post_data['content_text'] = clean_markdown(text_only)
-        post_data['has_markdown'] = True
         post_data['is_technical'] = classification.get('is_technical')
         post_data['technical_score'] = classification.get('score')
         post_data['code_blocks'] = len(code_blocks)

@@ -333,7 +333,7 @@ def _process_all_sources(
         _print_source_header(console, idx, len(sources), src)
         
         # Get posts to process
-        posts = _get_posts_to_process(db, src, force, limit, technical_only)
+        posts = _get_posts_to_process(db, src, force, limit, technical_only, modern)
         
         if not posts:
             console.print(
@@ -406,7 +406,8 @@ def _get_posts_to_process(
     source: str,
     force: bool,
     limit: Optional[int],
-    technical_only: bool = False
+    technical_only: bool = False,
+    modern: bool = False
 ) -> List[Dict[str, Any]]:
     """Get posts that need ML processing from database.
     
@@ -416,6 +417,7 @@ def _get_posts_to_process(
         force: Whether to reprocess all posts
         limit: Optional limit on number of posts
         technical_only: Filter only technical posts
+        modern: Use modern model version
         
     Returns:
         List of post dictionaries from database
@@ -437,15 +439,16 @@ def _get_posts_to_process(
             
             query += " ORDER BY published_at DESC"
         else:
-            # Only posts without ML data
+            # Only posts without ML data for this model version
+            model_version = 'modern-v1' if modern else 'legacy-v1'
             query = """
-                SELECT * FROM posts 
-                WHERE source = ? 
-                AND content_markdown IS NOT NULL
-                AND (tech_stack IS NULL OR patterns IS NULL 
-                     OR ml_classified = 0)
+                SELECT p.* FROM posts p
+                LEFT JOIN ml_discoveries md ON p.id = md.post_id AND md.model_version = ?
+                WHERE p.source = ? 
+                AND p.content_markdown IS NOT NULL
+                AND md.id IS NULL
             """
-            params = [source]
+            params = [model_version, source]
             
             # Filter technical posts if requested
             if technical_only:
@@ -556,8 +559,16 @@ def _process_source_with_ml(
     console.print()
     
     try:
+        # Determine model version and pipeline type
+        if modern:
+            model_version = 'modern-llm-v1' if use_llm else 'modern-v1'
+            pipeline_type = 'modern-llm' if use_llm else 'modern'
+        else:
+            model_version = 'legacy-v1'
+            pipeline_type = 'legacy'
+        
         # Create incremental save callback
-        save_callback = _create_save_callback(console, db, len(entries))
+        save_callback = _create_save_callback(console, db, len(entries), model_version, pipeline_type)
         
         # Run ML processing with appropriate method
         if modern:
@@ -598,7 +609,9 @@ def _process_source_with_ml(
 def _create_save_callback(
     console: Console,
     db: PipelineDB,
-    total_entries: int
+    total_entries: int,
+    model_version: str,
+    pipeline_type: str
 ) -> Callable[[str, Dict[str, Any]], None]:
     """Create callback function for incremental post saving.
     
@@ -606,6 +619,8 @@ def _create_save_callback(
         console: Rich console for progress output
         db: Database instance for saving
         total_entries: Total number of entries being processed
+        model_version: ML model version (e.g., 'modern-v1', 'legacy-v1')
+        pipeline_type: Pipeline type ('modern', 'modern-llm', 'legacy')
         
     Returns:
         Callback function that saves posts incrementally
@@ -622,7 +637,7 @@ def _create_save_callback(
         Returns:
             None
         """
-        db.update_ml_discovery(post_id, ml_data)
+        db.update_ml_discovery(post_id, ml_data, model_version, pipeline_type)
         saved_count['count'] += 1
         
         if saved_count['count'] % SAVE_PROGRESS_INTERVAL == 0:
