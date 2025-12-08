@@ -21,13 +21,14 @@ class PipelineDB:
     @contextmanager
     def _get_connection(self):
         """Context manager for database connections"""
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=30.0)  # Increased timeout to 30s
         conn.row_factory = sqlite3.Row  # Return rows as dicts
         try:
             # Improve concurrency for multiple writers/readers
             # Enable Write-Ahead Logging (WAL) and relaxed synchronous for speed
             conn.execute("PRAGMA journal_mode=WAL;")
             conn.execute("PRAGMA synchronous=NORMAL;")
+            conn.execute("PRAGMA busy_timeout=30000;")  # 30s busy timeout
         except Exception:
             # If PRAGMA fails, continue with default settings
             pass

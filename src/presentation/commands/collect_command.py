@@ -297,21 +297,30 @@ def _collect_posts(
             }
             
             # Save or update with retry for database locks
-            max_retries = 5
+            max_retries = 10
+            saved = False
             for attempt in range(max_retries):
                 try:
                     db.add_or_update_post(post_data)
+                    saved = True
                     break
                 except Exception as db_err:
                     if 'database is locked' in str(db_err) and attempt < max_retries - 1:
-                        time.sleep(0.1 * (2 ** attempt))  # Exponential backoff: 0.1, 0.2, 0.4, 0.8s
+                        # Exponential backoff with jitter: 0.2, 0.4, 0.8, 1.6, 3.2s
+                        import random
+                        wait_time = (0.2 * (2 ** attempt)) + random.uniform(0, 0.1)
+                        time.sleep(wait_time)
                         continue
                     raise
             
-            if existing:
-                stats['updated'] += 1
-            else:
-                stats['collected'] += 1
+            if saved:
+                if existing:
+                    stats['updated'] += 1
+                else:
+                    stats['collected'] += 1
+            
+            # Small delay between posts to reduce lock contention
+            time.sleep(0.01)
                 
         except Exception as e:
             post_id_safe = post.id.value if hasattr(post.id, 'value') else str(post.id)
