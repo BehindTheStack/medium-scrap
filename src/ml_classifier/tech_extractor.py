@@ -595,27 +595,36 @@ class TechExtractionPipeline:
         self.use_patterns = use_patterns
         self.use_llm = use_llm
         
-        # Lazy initialization
+        self.gliner_model = gliner_model
+        self.llm_model = llm_model
+        
+        # Eager initialization to avoid reloading
         self._gliner: Optional[GLiNERExtractor] = None
         self._patterns: Optional[PatternClassifier] = None
         self._llm: Optional[LLMStructuredExtractor] = None
         
-        self.gliner_model = gliner_model
-        self.llm_model = llm_model
+        # Pre-load enabled extractors
+        if use_gliner:
+            self._gliner = GLiNERExtractor(gliner_model)
+            self._gliner._load()  # Force load immediately
+            
+        if use_patterns:
+            self._patterns = PatternClassifier()
+            self._patterns._load()  # Force load immediately
+            
+        if use_llm:
+            self._llm = LLMStructuredExtractor(llm_model)
         
-    def _get_gliner(self) -> GLiNERExtractor:
-        if self._gliner is None:
-            self._gliner = GLiNERExtractor(self.gliner_model)
+    def _get_gliner(self) -> Optional[GLiNERExtractor]:
+        """Get GLiNER extractor (already loaded)"""
         return self._gliner
     
-    def _get_patterns(self) -> PatternClassifier:
-        if self._patterns is None:
-            self._patterns = PatternClassifier()
+    def _get_patterns(self) -> Optional[PatternClassifier]:
+        """Get Pattern classifier (already loaded)"""
         return self._patterns
     
-    def _get_llm(self) -> LLMStructuredExtractor:
-        if self._llm is None:
-            self._llm = LLMStructuredExtractor(self.llm_model)
+    def _get_llm(self) -> Optional[LLMStructuredExtractor]:
+        """Get LLM extractor (already loaded)"""
         return self._llm
     
     def process(self, post_id: str, text: str) -> TechnicalExtraction:
