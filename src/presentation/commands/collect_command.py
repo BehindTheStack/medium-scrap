@@ -18,11 +18,7 @@ from rich.table import Table
 
 from src.infrastructure.config.source_manager import SourceConfigManager
 from src.infrastructure.pipeline_db import PipelineDB
-from src.infrastructure.content_extractor import (
-    html_to_markdown,
-    extract_code_blocks,
-    classify_technical
-)
+
 from src.infrastructure.adapters.medium_api_adapter import MediumApiAdapter
 from src.infrastructure.external.repositories import InMemoryPublicationRepository, MediumSessionRepository
 from src.domain.services.publication_service import PostDiscoveryService, PublicationConfigService
@@ -210,32 +206,37 @@ def _collect_posts(
     
     publication_name = source_config.get_publication_name()
     
-    console.print(f"[cyan]🔍 Fetching posts from publication: {publication_name}[/cyan]")
-    
     # Fetch posts using the use case
     try:
         # Add small delay to avoid rate limiting
         import time as time_module
         time_module.sleep(0.5)
         
-        # Setup repositories and services (fresh instances for each source)
-        post_repo = MediumApiAdapter()
-        pub_repo = InMemoryPublicationRepository()
-        sess_repo = MediumSessionRepository()
-        
-        svc = PostDiscoveryService(post_repo)
-        cfg_svc = PublicationConfigService(pub_repo)
-        use_case = ScrapePostsUseCase(svc, cfg_svc, sess_repo)
-        
-        # Execute scraping
-        req = ScrapePostsRequest(
-            publication_name=publication_name,
-            limit=limit,
-            auto_discover=True,
-            skip_session=True,
-            mode=COLLECTION_MODE
-        )
-        resp = use_case.execute(req)
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console
+        ) as progress:
+            progress.add_task(f"[cyan]Fetching posts from {publication_name}...", total=None)
+            
+            # Setup repositories and services (fresh instances for each source)
+            post_repo = MediumApiAdapter()
+            pub_repo = InMemoryPublicationRepository()
+            sess_repo = MediumSessionRepository()
+            
+            svc = PostDiscoveryService(post_repo)
+            cfg_svc = PublicationConfigService(pub_repo)
+            use_case = ScrapePostsUseCase(svc, cfg_svc, sess_repo)
+            
+            # Execute scraping
+            req = ScrapePostsRequest(
+                publication_name=publication_name,
+                limit=limit,
+                auto_discover=True,
+                skip_session=True,
+                mode=COLLECTION_MODE
+            )
+            resp = use_case.execute(req)
         
         if not resp.success or not resp.posts:
             if resp.total_posts_found > 0:
@@ -258,74 +259,87 @@ def _collect_posts(
         return stats
     
     console.print()
-    console.print(f"[cyan]📝 Saving {len(posts)} posts to database...[/cyan]")
     
-    # Save posts to database
-    for post in posts:
-        try:
-            # Handle both PostId objects and plain strings
-            post_id = post.id.value if hasattr(post.id, 'value') else str(post.id)
-            existing = db.post_exists(post_id)
-            
-            # Skip if exists and not updating
-            if existing and not update:
-                stats['updated'] += 1
-                continue
-            
-            # Handle author ID (plain string, not a value object)
-            author_id = ''
-            if post.author:
-                author_id = post.author.id if isinstance(post.author.id, str) else str(post.author.id)
-            
-            # Create post data dict from domain object
-            post_data = {
-                'id': post_id,
-                'title': post.title,
-                'subtitle': post.subtitle or '',
-                'url': post.url or f"https://medium.com/p/{post_id}",
-                'published_at': post.published_at.isoformat() if post.published_at else None,
-                'latest_published_at': post.latest_published_at.isoformat() if post.latest_published_at else None,
-                'author': post.author.name if post.author else '',
-                'author_id': author_id,
-                'tags': post.tags if isinstance(post.tags, list) else [],
-                'claps': post.claps or 0,
-                'reading_time': post.reading_time or 0,
-                'source': source_key,
-                'publication': publication_name,
-                'content_markdown': None,  # Will be enriched later
-                'is_technical': False  # Will be classified later
-            }
-            
-            # Save or update with retry for database locks
-            max_retries = 10
-            saved = False
-            for attempt in range(max_retries):
-                try:
-                    db.add_or_update_post(post_data)
-                    saved = True
-                    break
-                except Exception as db_err:
-                    if 'database is locked' in str(db_err) and attempt < max_retries - 1:
-                        # Exponential backoff with jitter: 0.2, 0.4, 0.8, 1.6, 3.2s
-                        import random
-                        wait_time = (0.2 * (2 ** attempt)) + random.uniform(0, 0.1)
-                        time.sleep(wait_time)
-                        continue
-                    raise
-            
-            if saved:
-                if existing:
-                    stats['updated'] += 1
-                else:
-                    stats['collected'] += 1
-            
-            # Small delay between posts to reduce lock contention
-            time.sleep(0.01)
+    # Save posts to database with progress bar
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+        TextColumn("•"),
+        TextColumn("{task.completed}/{task.total}"),
+        TimeElapsedColumn(),
+        console=console
+    ) as progress:
+        task = progress.add_task(f"[cyan]Saving posts...", total=len(posts))
+        
+        for post in posts:
+            try:
+                # Handle both PostId objects and plain strings
+                post_id = post.id.value if hasattr(post.id, 'value') else str(post.id)
+                existing = db.post_exists(post_id)
                 
-        except Exception as e:
-            post_id_safe = post.id.value if hasattr(post.id, 'value') else str(post.id)
-            console.print(f"[red]Error saving post {post_id_safe}: {e}[/red]")
-            stats['failed'] += 1
+                # Skip if exists and not updating
+                if existing and not update:
+                    stats['updated'] += 1
+                    continue
+                
+                # Handle author ID (plain string, not a value object)
+                author_id = ''
+                if post.author:
+                    author_id = post.author.id if isinstance(post.author.id, str) else str(post.author.id)
+                
+                # Create post data dict from domain object
+                post_data = {
+                    'id': post_id,
+                    'title': post.title,
+                    'subtitle': post.subtitle or '',
+                    'url': post.url or f"https://medium.com/p/{post_id}",
+                    'published_at': post.published_at.isoformat() if post.published_at else None,
+                    'latest_published_at': post.latest_published_at.isoformat() if post.latest_published_at else None,
+                    'author': post.author.name if post.author else '',
+                    'author_id': author_id,
+                    'tags': post.tags if isinstance(post.tags, list) else [],
+                    'claps': post.claps or 0,
+                    'reading_time': post.reading_time or 0,
+                    'source': source_key,
+                    'publication': publication_name,
+                    'content_markdown': None,  # Will be enriched later
+                    'is_technical': False  # Will be classified later
+                }
+                
+                # Save or update with retry for database locks
+                max_retries = 10
+                saved = False
+                for attempt in range(max_retries):
+                    try:
+                        db.add_or_update_post(post_data)
+                        saved = True
+                        break
+                    except Exception as db_err:
+                        if 'database is locked' in str(db_err) and attempt < max_retries - 1:
+                            # Exponential backoff with jitter: 0.2, 0.4, 0.8, 1.6, 3.2s
+                            import random
+                            wait_time = (0.2 * (2 ** attempt)) + random.uniform(0, 0.1)
+                            time.sleep(wait_time)
+                            continue
+                        raise
+                
+                if saved:
+                    if existing:
+                        stats['updated'] += 1
+                    else:
+                        stats['collected'] += 1
+                
+                # Small delay between posts to reduce lock contention
+                time.sleep(0.01)
+                    
+            except Exception as e:
+                post_id_safe = post.id.value if hasattr(post.id, 'value') else str(post.id)
+                progress.console.print(f"[red]Error saving post {post_id_safe}: {e}[/red]")
+                stats['failed'] += 1
+            finally:
+                progress.advance(task)
     
     # Print source summary
     console.print()
