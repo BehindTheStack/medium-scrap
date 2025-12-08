@@ -118,6 +118,15 @@ class GLiNERExtractor:
         "data_processing_tool",
     ]
     
+    # Company/publication names to exclude (not tech stack)
+    COMPANY_BLOCKLIST = {
+        "netflix", "airbnb", "uber", "lyft", "stripe", "spotify",
+        "medium", "kickstarter", "tinder", "wise", "olx", "skyscanner",
+        "facebook", "meta", "google", "amazon", "microsoft", "apple",
+        "twitter", "linkedin", "github", "gitlab", "slack",
+        "new york times", "nyt", "nytimes", "the new york times"
+    }
+    
     def __init__(self, model_name: str = "urchade/gliner_small-v2.1"):
         """
         Initialize GLiNER model.
@@ -189,6 +198,10 @@ class GLiNERExtractor:
                 
                 # Skip duplicates and very short names
                 if name_lower in seen or len(name) < 2:
+                    continue
+                
+                # Skip company/publication names (not tech stack)
+                if name_lower in self.COMPANY_BLOCKLIST:
                     continue
                     
                 seen.add(name_lower)
@@ -459,7 +472,7 @@ Return ONLY valid JSON, no markdown or explanation."""
         
         Args:
             model: Ollama model name. Recommended:
-                - "qwen2.5:7b" - Best JSON reliability
+                - "qwen2.5:14b" - Best JSON reliability
                 - "phi3:medium" - Good alternative
                 - "llama3.1:8b" - Faster but less reliable JSON
         """
@@ -566,7 +579,7 @@ class TechExtractionPipeline:
         use_patterns: bool = True,
         use_llm: bool = False,
         gliner_model: str = "urchade/gliner_small-v2.1",
-        llm_model: str = "qwen2.5:7b"
+        llm_model: str = "qwen2.5:14b"
     ):
         """
         Initialize the extraction pipeline.
