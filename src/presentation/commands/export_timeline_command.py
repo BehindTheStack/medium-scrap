@@ -590,7 +590,7 @@ def _build_entries_from_posts(
             'title': post.get('title', 'Untitled'),
             'date': date.isoformat() if date else None,
             'url': post.get('url'),
-            'author': post.get('author', 'Unknown'),
+            'author': post.get('author_name', 'Unknown'),
             'reading_time': post.get('reading_time', 0),
             'snippet': snippet,
             'is_technical': post.get('is_technical', False),

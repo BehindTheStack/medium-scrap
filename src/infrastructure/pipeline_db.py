@@ -515,6 +515,16 @@ class PipelineDB:
             patterns_json = json.dumps(ml_data.get('patterns', []))
             solutions_json = json.dumps(ml_data.get('solutions', []))
             
+            # Ensure embedding_vector is bytes or None (not dict)
+            embedding_vector = ml_data.get('embedding_vector')
+            if isinstance(embedding_vector, dict):
+                embedding_vector = None
+            
+            # Ensure embedding_model is string or None (not dict/list)
+            embedding_model = ml_data.get('embedding_model')
+            if not isinstance(embedding_model, (str, type(None))):
+                embedding_model = None
+            
             # Check if discovery already exists for this version
             cursor.execute("""
                 SELECT id FROM ml_discoveries 
@@ -548,8 +558,8 @@ class PipelineDB:
                     solutions_json,
                     ml_data.get('problem'),
                     ml_data.get('approach'),
-                    ml_data.get('embedding_model'),
-                    ml_data.get('embedding_vector'),
+                    embedding_model,
+                    embedding_vector,
                     ml_data.get('extraction_confidence', 0.5),
                     post_id,
                     model_version
@@ -573,8 +583,8 @@ class PipelineDB:
                     solutions_json,
                     ml_data.get('problem'),
                     ml_data.get('approach'),
-                    ml_data.get('embedding_model'),
-                    ml_data.get('embedding_vector'),
+                    embedding_model,
+                    embedding_vector,
                     ml_data.get('extraction_confidence', 0.5)
                 ))
     

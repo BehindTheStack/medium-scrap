@@ -706,7 +706,7 @@ class ModernMLProcessor:
         use_gliner: bool = True,
         use_patterns: bool = True,
         use_llm: bool = False,
-        llm_model: str = "qwen2.5:7b"
+        llm_model: str = "qwen2.5:14b"
     ) -> float:
         """
         Load the modern extraction pipeline.
