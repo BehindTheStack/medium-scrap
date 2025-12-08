@@ -12,8 +12,8 @@ sources:
     auto_discover: true
     custom_domain: false
   tinder:
-    type: username
-    name: '@TinderEng'
+    type: publication
+    name: 'tinder'
     description: Tinder Engineering - Dating app technology (via username)
     auto_discover: true
     custom_domain: false
@@ -65,6 +65,12 @@ sources:
     description: Deezer Engineering - Music streaming technology
     auto_discover: true
     custom_domain: true
+  pinterest:
+    type: publication
+    name: pinterest-engineering
+    description: Pinterest Engineering - Visual discovery technology
+    auto_discover: true
+    custom_domain: false
 defaults:
   limit: 50
   skip_session: true
