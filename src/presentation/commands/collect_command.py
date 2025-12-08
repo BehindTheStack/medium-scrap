@@ -263,13 +263,19 @@ def _collect_posts(
     # Save posts to database
     for post in posts:
         try:
-            post_id = post.id.value
+            # Handle both PostId objects and plain strings
+            post_id = post.id.value if hasattr(post.id, 'value') else str(post.id)
             existing = db.post_exists(post_id)
             
             # Skip if exists and not updating
             if existing and not update:
                 stats['updated'] += 1
                 continue
+            
+            # Handle author ID (plain string, not a value object)
+            author_id = ''
+            if post.author:
+                author_id = post.author.id if isinstance(post.author.id, str) else str(post.author.id)
             
             # Create post data dict from domain object
             post_data = {
@@ -278,19 +284,29 @@ def _collect_posts(
                 'subtitle': post.subtitle or '',
                 'url': post.url or f"https://medium.com/p/{post_id}",
                 'published_at': post.published_at.isoformat() if post.published_at else None,
-                'updated_at': post.updated_at.isoformat() if post.updated_at else None,
+                'latest_published_at': post.latest_published_at.isoformat() if post.latest_published_at else None,
                 'author': post.author.name if post.author else '',
-                'author_id': post.author.id.value if post.author and post.author.id else '',
-                'tags': [tag.display_title for tag in post.tags] if post.tags else [],
+                'author_id': author_id,
+                'tags': post.tags if isinstance(post.tags, list) else [],
                 'claps': post.claps or 0,
                 'reading_time': post.reading_time or 0,
                 'source': source_key,
+                'publication': publication_name,
                 'content_markdown': None,  # Will be enriched later
                 'is_technical': False  # Will be classified later
             }
             
-            # Save or update
-            db.add_or_update_post(post_data)
+            # Save or update with retry for database locks
+            max_retries = 5
+            for attempt in range(max_retries):
+                try:
+                    db.add_or_update_post(post_data)
+                    break
+                except Exception as db_err:
+                    if 'database is locked' in str(db_err) and attempt < max_retries - 1:
+                        time.sleep(0.1 * (2 ** attempt))  # Exponential backoff: 0.1, 0.2, 0.4, 0.8s
+                        continue
+                    raise
             
             if existing:
                 stats['updated'] += 1
@@ -298,7 +314,8 @@ def _collect_posts(
                 stats['collected'] += 1
                 
         except Exception as e:
-            console.print(f"[red]Error saving post {post.id.value}: {e}[/red]")
+            post_id_safe = post.id.value if hasattr(post.id, 'value') else str(post.id)
+            console.print(f"[red]Error saving post {post_id_safe}: {e}[/red]")
             stats['failed'] += 1
     
     # Print source summary

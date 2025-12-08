@@ -242,6 +242,7 @@ class PatternClassifier:
     
     # Architecture patterns with semantic descriptions for matching
     PATTERNS = {
+        # Distributed Systems
         "Event Sourcing": [
             "event store", "event log", "replay events", "event stream",
             "append-only log", "event sourcing", "state from events",
@@ -252,42 +253,83 @@ class PatternClassifier:
             "separate read write", "read model", "write model", 
             "projections", "query side", "command side"
         ],
+        "Saga Pattern": [
+            "saga", "distributed transaction", "compensating transaction",
+            "orchestration saga", "choreography saga", "long-running transaction"
+        ],
+        "Change Data Capture": [
+            "change data capture", "CDC", "database replication",
+            "log-based replication", "debezium", "transaction log"
+        ],
+        
+        # Backend & APIs
         "Microservices": [
             "microservices", "micro services", "service mesh", "API gateway",
             "service discovery", "independent deployment", "bounded services",
             "decomposed services", "service-oriented"
+        ],
+        "API Gateway Pattern": [
+            "api gateway", "backend for frontend", "BFF", "api aggregation",
+            "routing layer", "api management"
         ],
         "Event-Driven Architecture": [
             "event-driven", "message queue", "pub/sub", "async messaging",
             "event bus", "choreography", "reactive", "publish subscribe",
             "message broker", "event notification"
         ],
-        "Data Mesh": [
-            "data mesh", "data products", "domain ownership",
-            "federated governance", "self-serve data", "data as product",
-            "domain-oriented data"
-        ],
         "Domain-Driven Design": [
             "DDD", "bounded context", "aggregate", "domain model",
             "ubiquitous language", "domain events", "entity", "value object",
             "domain-driven design"
         ],
-        "Saga Pattern": [
-            "saga", "distributed transaction", "compensating transaction",
-            "orchestration saga", "choreography saga", "long-running transaction"
+        
+        # Cloud Infrastructure
+        "Service Mesh": [
+            "service mesh", "sidecar proxy", "istio", "envoy", "linkerd",
+            "traffic management", "service-to-service"
+        ],
+        "Sidecar Pattern": [
+            "sidecar", "sidecar container", "ambassador pattern",
+            "sidecar proxy", "attached container"
         ],
         "Strangler Fig Pattern": [
             "strangler fig", "strangler pattern", "gradual migration",
             "facade pattern migration", "incremental rewrite", "legacy migration"
         ],
+        
+        # Performance & Resilience
         "Circuit Breaker": [
             "circuit breaker", "fault tolerance", "bulkhead", "retry pattern",
-            "graceful degradation", "failure isolation"
+            "graceful degradation", "failure isolation", "timeout pattern"
         ],
-        "Service Mesh": [
-            "service mesh", "sidecar proxy", "istio", "envoy", "linkerd",
-            "traffic management", "service-to-service"
+        "Caching Strategy": [
+            "caching", "cache layer", "CDN", "redis cache", "memcached",
+            "cache invalidation", "cache-aside", "write-through cache"
         ],
+        "Rate Limiting": [
+            "rate limiting", "throttling", "token bucket", "leaky bucket",
+            "API rate limit", "request throttling"
+        ],
+        "Database Sharding": [
+            "sharding", "horizontal partitioning", "shard key", "data partitioning",
+            "distributed database", "partition strategy"
+        ],
+        
+        # Observability
+        "Distributed Tracing": [
+            "distributed tracing", "jaeger", "zipkin", "opentelemetry",
+            "trace context", "span", "tracing", "request tracing"
+        ],
+        "Metrics & Monitoring": [
+            "prometheus", "grafana", "metrics", "monitoring", "alerting",
+            "time series", "instrumentation", "dashboards"
+        ],
+        "Log Aggregation": [
+            "log aggregation", "centralized logging", "ELK", "elasticsearch",
+            "splunk", "log collection", "log analysis"
+        ],
+        
+        # Data Infrastructure
         "Stream Processing": [
             "stream processing", "real-time processing", "streaming pipeline",
             "event stream", "continuous processing", "streaming analytics"
@@ -304,29 +346,24 @@ class PatternClassifier:
             "data lake", "raw data storage", "schema on read", "unstructured data",
             "data reservoir"
         ],
-        "Feature Store": [
-            "feature store", "feature engineering", "ml features",
-            "feature serving", "feature registry"
-        ],
-        "MLOps": [
-            "mlops", "ml pipeline", "model deployment", "model serving",
-            "model registry", "experiment tracking", "feature pipeline"
-        ],
-        "API Gateway Pattern": [
-            "api gateway", "backend for frontend", "BFF", "api aggregation",
-            "routing layer", "api management"
-        ],
-        "Sidecar Pattern": [
-            "sidecar", "sidecar container", "ambassador pattern",
-            "sidecar proxy", "attached container"
-        ],
-        "Change Data Capture": [
-            "change data capture", "CDC", "database replication",
-            "log-based replication", "debezium", "transaction log"
+        "Data Mesh": [
+            "data mesh", "data products", "domain ownership",
+            "federated governance", "self-serve data", "data as product",
+            "domain-oriented data"
         ],
         "Polyglot Persistence": [
             "polyglot persistence", "multiple databases", "right tool for job",
             "database per service", "specialized storage"
+        ],
+        
+        # ML/AI Platform
+        "MLOps": [
+            "mlops", "ml pipeline", "model deployment", "model serving",
+            "model registry", "experiment tracking", "feature pipeline"
+        ],
+        "Feature Store": [
+            "feature store", "feature engineering", "ml features",
+            "feature serving", "feature registry"
         ]
     }
     
@@ -456,6 +493,22 @@ Be precise and factual:
 Blog Post:
 {text}
 
+IMPORTANT: Only use these recognized architecture patterns (choose what applies):
+
+DISTRIBUTED SYSTEMS: Event Sourcing, CQRS, Saga Pattern, Change Data Capture
+
+BACKEND & APIs: Microservices, API Gateway Pattern, Event-Driven Architecture, Domain-Driven Design
+
+CLOUD INFRASTRUCTURE: Service Mesh, Sidecar Pattern, Strangler Fig Pattern
+
+PERFORMANCE & RESILIENCE: Circuit Breaker, Caching Strategy, Rate Limiting, Database Sharding
+
+OBSERVABILITY: Distributed Tracing, Metrics & Monitoring, Log Aggregation
+
+DATA INFRASTRUCTURE: Stream Processing, Lambda Architecture, Kappa Architecture, Data Lake, Data Mesh, Polyglot Persistence
+
+ML/AI PLATFORM: MLOps, Feature Store
+
 Extract as JSON with these exact fields:
 {{
     "tech_stack": {{
@@ -467,7 +520,7 @@ Extract as JSON with these exact fields:
         "observability": ["monitoring, logging, tracing"]
     }},
     "architecture_patterns": [
-        {{"name": "pattern name", "evidence": "brief quote from text"}}
+        {{"name": "use EXACT name from list above", "evidence": "brief quote from text"}}
     ],
     "problems_addressed": ["specific technical challenges faced"],
     "solutions_implemented": ["how problems were solved"],
