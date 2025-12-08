@@ -175,8 +175,17 @@ class GLiNERExtractor:
         if not self._loaded or not self.model:
             return []
             
-        # Clean and truncate text for model
-        text_clean = clean_markdown(text)[:8000]  # GLiNER context limit
+        # Clean and smart truncate text for model
+        text_clean = clean_markdown(text)
+        
+        # GLiNER can handle ~12k chars (3k tokens) efficiently
+        # Use smart truncation: keep beginning (context) + end (conclusions)
+        max_chars = 12000
+        if len(text_clean) > max_chars:
+            # Keep first 70% and last 30% to preserve intro and conclusions
+            keep_start = int(max_chars * 0.7)
+            keep_end = int(max_chars * 0.3)
+            text_clean = text_clean[:keep_start] + "\n...\n" + text_clean[-keep_end:]
         
         if len(text_clean) < 50:
             return []
@@ -377,9 +386,10 @@ class PatternClassifier:
             return []
         
         try:
-            # Encode all sentences
+            # Encode all sentences (increased limit for better coverage)
+            # Most blog posts have 50-200 sentences, encoding 200 is fast (~0.1s)
             sentence_embeddings = self.model.encode(
-                sentences[:100],  # Limit for performance
+                sentences[:200],  # Increased from 100 to cover full articles
                 convert_to_tensor=True
             )
             
@@ -521,8 +531,15 @@ Return ONLY valid JSON, no markdown or explanation."""
             hints = ", ".join(set(e.name for e in gliner_hints[:15]))
             hints_section = f"GLiNER detected these technologies (verify and expand): {hints}\n"
         
-        # Truncate text for context window
-        text_clean = clean_markdown(text)[:6000]
+        # Smart truncate text for LLM context window (qwen2.5:14b = 8192 tokens)
+        text_clean = clean_markdown(text)
+        max_chars = 16000  # ~4000 tokens, leaving room for prompt + response
+        
+        if len(text_clean) > max_chars:
+            # Keep first 60% (problem description) + last 40% (solution/conclusion)
+            keep_start = int(max_chars * 0.6)
+            keep_end = int(max_chars * 0.4)
+            text_clean = text_clean[:keep_start] + "\n\n[...content truncated...]\n\n" + text_clean[-keep_end:]
         
         prompt = self.EXTRACTION_PROMPT.format(
             hints_section=hints_section,

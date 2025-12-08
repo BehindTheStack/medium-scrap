@@ -509,21 +509,32 @@ class PipelineDB:
         with self._get_connection() as conn:
             cursor = conn.cursor()
             
-            # Serialize JSON fields
+            # Serialize JSON fields (always convert to JSON string)
             layers_json = json.dumps(ml_data.get('layers', []))
             tech_stack_json = json.dumps(ml_data.get('tech_stack', []))
             patterns_json = json.dumps(ml_data.get('patterns', []))
             solutions_json = json.dumps(ml_data.get('solutions', []))
             
-            # Ensure embedding_vector is bytes or None (not dict)
-            embedding_vector = ml_data.get('embedding_vector')
-            if isinstance(embedding_vector, dict):
-                embedding_vector = None
+            # Sanitize scalar fields - ensure they're the correct type
+            problem = ml_data.get('problem')
+            if not isinstance(problem, (str, type(None))):
+                problem = None
             
-            # Ensure embedding_model is string or None (not dict/list)
+            approach = ml_data.get('approach')
+            if not isinstance(approach, (str, type(None))):
+                approach = None
+            
             embedding_model = ml_data.get('embedding_model')
             if not isinstance(embedding_model, (str, type(None))):
                 embedding_model = None
+            
+            embedding_vector = ml_data.get('embedding_vector')
+            if not isinstance(embedding_vector, (bytes, type(None))):
+                embedding_vector = None
+            
+            extraction_confidence = ml_data.get('extraction_confidence', 0.5)
+            if not isinstance(extraction_confidence, (int, float)):
+                extraction_confidence = 0.5
             
             # Check if discovery already exists for this version
             cursor.execute("""
@@ -556,11 +567,11 @@ class PipelineDB:
                     tech_stack_json,
                     patterns_json,
                     solutions_json,
-                    ml_data.get('problem'),
-                    ml_data.get('approach'),
+                    problem,
+                    approach,
                     embedding_model,
                     embedding_vector,
-                    ml_data.get('extraction_confidence', 0.5),
+                    extraction_confidence,
                     post_id,
                     model_version
                 ))
@@ -581,11 +592,11 @@ class PipelineDB:
                     tech_stack_json,
                     patterns_json,
                     solutions_json,
-                    ml_data.get('problem'),
-                    ml_data.get('approach'),
+                    problem,
+                    approach,
                     embedding_model,
                     embedding_vector,
-                    ml_data.get('extraction_confidence', 0.5)
+                    extraction_confidence
                 ))
     
     def get_posts_needing_ml_classification(self, model_version: str = 'legacy-v1') -> List[Dict]:
