@@ -1,3 +1,4 @@
+
 """
 ML Processing Logic
 Handles all machine learning extraction operations
@@ -5,6 +6,16 @@ Handles all machine learning extraction operations
 Supports two extraction modes:
 1. Legacy: BERT NER + n-grams + QA (original approach)
 2. Modern: GLiNER + Semantic Patterns + Optional LLM (2024 approach)
+
+------------------------------------------------------------
+PATTERNS vs TOPIC LAYERS
+------------------------------------------------------------
+• Architecture Patterns: 28 específicos, categorizados e centralizados em PATTERN_TO_LAYER (importado de tech_extractor.py). Usados para inferir camada arquitetural a partir de padrões reconhecidos no texto.
+• Topic Layers: 8 genéricos, baseados em clustering de tópicos (Data & ML, Backend & APIs, Infrastructure, Frontend & UI, Database & Storage, Streaming & Events, Observability, Security). Usados para agrupamento automático via KMeans/TF-IDF.
+
+→ Patterns = taxonomia explícita (regra de negócio)
+→ Topic Layers = agrupamento automático (clustering)
+------------------------------------------------------------
 """
 
 import re
@@ -13,14 +24,13 @@ from typing import List, Dict, Any, Tuple, Optional, Callable
 from pathlib import Path
 import sys
 
-import numpy as np
 from sklearn.cluster import KMeans
 from sklearn.feature_extraction.text import TfidfVectorizer
 from rich.console import Console
 
-from ..schemas.ml_schemas import MLDiscoveryData
 from .progress_display import ProgressDisplay
-from .text_cleaner import clean_markdown, chunk_text
+from .text_cleaner import clean_markdown
+from ...ml_classifier.tech_extractor import PATTERN_TO_LAYER
 
 
 class MLProcessor:
@@ -861,34 +871,13 @@ class ModernMLProcessor:
         if not patterns:
             return ['General']
         
-        # Map patterns to layers
-        pattern_to_layer = {
-            'Event Sourcing': 'Data & Events',
-            'CQRS': 'Data & Events',
-            'Microservices': 'Backend & APIs',
-            'Event-Driven Architecture': 'Streaming & Events',
-            'Data Mesh': 'Data & ML',
-            'Domain-Driven Design': 'Backend & APIs',
-            'Saga Pattern': 'Backend & APIs',
-            'Strangler Fig Pattern': 'Infrastructure',
-            'Circuit Breaker': 'Infrastructure',
-            'Service Mesh': 'Infrastructure',
-            'Stream Processing': 'Streaming & Events',
-            'Lambda Architecture': 'Data & ML',
-            'Kappa Architecture': 'Data & ML',
-            'Data Lake': 'Data & ML',
-            'Feature Store': 'Data & ML',
-            'MLOps': 'Data & ML',
-            'API Gateway Pattern': 'Backend & APIs',
-            'Sidecar Pattern': 'Infrastructure',
-            'Change Data Capture': 'Data & Events',
-            'Polyglot Persistence': 'Database & Storage',
-        }
-        
+        # Map patterns to layers (aligned with tech_extractor.py 28 patterns)
+        # Categories: Distributed Systems, Backend & APIs, Cloud Infrastructure,
+        #             Performance & Resilience, Observability, Data Infrastructure, ML/AI Platform
         layers = []
         for p in patterns:
             pattern_name = p.name if hasattr(p, 'name') else p.get('pattern', '')
-            layer = pattern_to_layer.get(pattern_name)
+            layer = PATTERN_TO_LAYER.get(pattern_name)
             if layer and layer not in layers:
                 layers.append(layer)
         

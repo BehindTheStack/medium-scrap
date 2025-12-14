@@ -240,6 +240,11 @@ class PatternClassifier:
     using cosine similarity.
     """
     
+    __all__ = [
+        "PATTERNS",
+        "PATTERN_TO_LAYER",
+    ]
+
     # Architecture patterns with semantic descriptions for matching
     PATTERNS = {
         # Distributed Systems
@@ -365,6 +370,48 @@ class PatternClassifier:
             "feature store", "feature engineering", "ml features",
             "feature serving", "feature registry"
         ]
+    }
+    
+    PATTERN_TO_LAYER = {
+        # Distributed Systems
+        'Event Sourcing': 'Distributed Systems',
+        'CQRS': 'Distributed Systems',
+        'Saga Pattern': 'Distributed Systems',
+        'Change Data Capture': 'Distributed Systems',
+
+        # Backend & APIs
+        'Microservices': 'Backend & APIs',
+        'API Gateway Pattern': 'Backend & APIs',
+        'Event-Driven Architecture': 'Backend & APIs',
+        'Domain-Driven Design': 'Backend & APIs',
+
+        # Cloud Infrastructure
+        'Service Mesh': 'Cloud Infrastructure',
+        'Sidecar Pattern': 'Cloud Infrastructure',
+        'Strangler Fig Pattern': 'Cloud Infrastructure',
+
+        # Performance & Resilience
+        'Circuit Breaker': 'Performance & Resilience',
+        'Caching Strategy': 'Performance & Resilience',
+        'Rate Limiting': 'Performance & Resilience',
+        'Database Sharding': 'Performance & Resilience',
+
+        # Observability
+        'Distributed Tracing': 'Observability',
+        'Metrics & Monitoring': 'Observability',
+        'Log Aggregation': 'Observability',
+
+        # Data Infrastructure
+        'Stream Processing': 'Data Infrastructure',
+        'Lambda Architecture': 'Data Infrastructure',
+        'Kappa Architecture': 'Data Infrastructure',
+        'Data Lake': 'Data Infrastructure',
+        'Data Mesh': 'Data Infrastructure',
+        'Polyglot Persistence': 'Data Infrastructure',
+
+        # ML/AI Platform
+        'MLOps': 'ML/AI Platform',
+        'Feature Store': 'ML/AI Platform',
     }
     
     def __init__(self, model_name: str = "all-MiniLM-L6-v2"):
