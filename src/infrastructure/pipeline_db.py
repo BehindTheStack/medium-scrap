@@ -9,6 +9,46 @@ from pathlib import Path
 from typing import Optional, List, Dict, Any
 from contextlib import contextmanager
 
+def with_sqlite_retry(
+    max_retries: int = 8,
+    base_delay: float = 0.2,
+    max_delay: float = 5.0,
+):
+    """
+    Decorator para retry automático em erros 'database is locked' do SQLite.
+    Usa backoff exponencial + jitter.
+    """
+
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            delay = base_delay
+
+            for attempt in range(max_retries):
+                try:
+                    return func(*args, **kwargs)
+
+                except sqlite3.OperationalError as e:
+                    msg = str(e).lower()
+
+                    if "database is locked" in msg or "database is busy" in msg:
+                        if attempt >= max_retries - 1:
+                            raise
+
+                        sleep_time = min(delay, max_delay)
+                        sleep_time += random.uniform(0, sleep_time * 0.1)
+
+                        time.sleep(sleep_time)
+                        delay *= 2
+                        continue
+
+                    raise  # outro erro operacional não relacionado
+
+        return wrapper
+
+    return decorator
+
+
 
 class PipelineDB:
     """Database for tracking pipeline state and caching results"""
@@ -254,13 +294,14 @@ class PipelineDB:
     # Posts Management
     # =========================================================================
     
+    @with_sqlite_retry()
     def post_exists(self, post_id: str) -> bool:
-        """Check if post already exists in database"""
         with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT 1 FROM posts WHERE id = ?", (post_id,))
-            return cursor.fetchone() is not None
+            cur = conn.cursor()
+            cur.execute("SELECT 1 FROM posts WHERE id = ?", (post_id,))
+            return cur.fetchone() is not None
     
+    @with_sqlite_retry()
     def get_post(self, post_id: str) -> Optional[Dict]:
         """Get post by ID"""
         with self._get_connection() as conn:
@@ -268,7 +309,8 @@ class PipelineDB:
             cursor.execute("SELECT * FROM posts WHERE id = ?", (post_id,))
             row = cursor.fetchone()
             return dict(row) if row else None
-    
+        
+    @with_sqlite_retry()
     def add_or_update_post(self, post_data: Dict[str, Any]) -> None:
         """Add new post or update existing one"""
         now_unix = int(datetime.utcnow().timestamp())
@@ -426,6 +468,7 @@ class PipelineDB:
             if author_name:
                 self._upsert_author(author_username or author_name, author_name)
     
+    @with_sqlite_retry()
     def _upsert_author(self, author_id: str, name: str) -> None:
         """Insert or update author record"""
         with self._get_connection() as conn:
@@ -449,6 +492,7 @@ class PipelineDB:
                     VALUES (?, ?, ?, ?, ?)
                 """, (author_id, name, username, now_unix, now_unix))
     
+    @with_sqlite_retry()
     def get_posts_by_source(self, source: str, with_markdown_only: bool = False) -> List[Dict]:
         """Get all posts for a source"""
         with self._get_connection() as conn:
@@ -469,6 +513,7 @@ class PipelineDB:
             
             return [dict(row) for row in cursor.fetchall()]
     
+    @with_sqlite_retry()
     def get_posts_needing_markdown(self, source: Optional[str] = None) -> List[Dict]:
         """Get posts that need markdown extraction"""
         with self._get_connection() as conn:
@@ -487,6 +532,7 @@ class PipelineDB:
             
             return [dict(row) for row in cursor.fetchall()]
     
+    @with_sqlite_retry(max_retries=12)
     def update_ml_discovery(self, post_id: str, ml_data: Dict[str, Any], model_version: str = 'legacy-v1', pipeline_type: str = 'legacy') -> None:
         """
         Save ML discovery data for a post in ml_discoveries table.
@@ -505,109 +551,94 @@ class PipelineDB:
             model_version: Version identifier (e.g., 'modern-v1', 'legacy-v1')
             pipeline_type: Type of pipeline ('legacy', 'modern', 'modern-llm')
         """
-        import time
         
         now_unix = int(datetime.utcnow().timestamp())
-        max_retries = 12
-        delay = 0.5
-        for attempt in range(max_retries):
-            try:
-                with self._get_connection() as conn:
-                    cursor = conn.cursor()
-                    # Serialize JSON fields (always convert to JSON string)
-                    layers_json = json.dumps(ml_data.get('layers', []))
-                    tech_stack_json = json.dumps(ml_data.get('tech_stack', []))
-                    patterns_json = json.dumps(ml_data.get('patterns', []))
-                    solutions_json = json.dumps(ml_data.get('solutions', []))
-                    # Sanitize scalar fields - ensure they're the correct type
-                    problem = ml_data.get('problem')
-                    if not isinstance(problem, (str, type(None))):
-                        problem = None
-                    approach = ml_data.get('approach')
-                    if not isinstance(approach, (str, type(None))):
-                        approach = None
-                    embedding_model = ml_data.get('embedding_model')
-                    if not isinstance(embedding_model, (str, type(None))):
-                        embedding_model = None
-                    embedding_vector = ml_data.get('embedding_vector')
-                    if not isinstance(embedding_vector, (bytes, type(None))):
-                        embedding_vector = None
-                    extraction_confidence = ml_data.get('extraction_confidence', 0.5)
-                    if not isinstance(extraction_confidence, (int, float)):
-                        extraction_confidence = 0.5
-                    # Check if discovery already exists for this version
-                    cursor.execute("""
-                        SELECT id FROM ml_discoveries 
-                        WHERE post_id = ? AND model_version = ?
-                    """, (post_id, model_version))
-                    exists = cursor.fetchone()
-                    if exists:
-                        # Update existing discovery
-                        cursor.execute("""
-                            UPDATE ml_discoveries
-                            SET 
-                                pipeline_type = ?,
-                                processed_at = ?,
-                                layers = ?,
-                                tech_stack = ?,
-                                patterns = ?,
-                                solutions = ?,
-                                problem = ?,
-                                approach = ?,
-                                embedding_model = ?,
-                                embedding_vector = ?,
-                                extraction_confidence = ?
-                            WHERE post_id = ? AND model_version = ?
-                        """, (
-                            pipeline_type,
-                            now_unix,
-                            layers_json,
-                            tech_stack_json,
-                            patterns_json,
-                            solutions_json,
-                            problem,
-                            approach,
-                            embedding_model,
-                            embedding_vector,
-                            extraction_confidence,
-                            post_id,
-                            model_version
-                        ))
-                    else:
-                        # Insert new discovery
-                        cursor.execute("""
-                            INSERT INTO ml_discoveries (
-                                post_id, model_version, pipeline_type, processed_at,
-                                layers, tech_stack, patterns, solutions, problem, approach,
-                                embedding_model, embedding_vector, extraction_confidence
-                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """, (
-                            post_id,
-                            model_version,
-                            pipeline_type,
-                            now_unix,
-                            layers_json,
-                            tech_stack_json,
-                            patterns_json,
-                            solutions_json,
-                            problem,
-                            approach,
-                            embedding_model,
-                            embedding_vector,
-                            extraction_confidence
-                        ))
-                break  # Success, exit retry loop
-            except sqlite3.OperationalError as e:
-                if 'database is locked' in str(e):
-                    if attempt < max_retries - 1:
-                        time.sleep(delay)
-                        delay *= 2  # Exponential backoff
-                        continue
-                    else:
-                        raise
-                else:
-                    raise
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            # Serialize JSON fields (always convert to JSON string)
+            layers_json = json.dumps(ml_data.get('layers', []))
+            tech_stack_json = json.dumps(ml_data.get('tech_stack', []))
+            patterns_json = json.dumps(ml_data.get('patterns', []))
+            solutions_json = json.dumps(ml_data.get('solutions', []))
+            # Sanitize scalar fields - ensure they're the correct type
+            problem = ml_data.get('problem')
+            if not isinstance(problem, (str, type(None))):
+                problem = None
+            approach = ml_data.get('approach')
+            if not isinstance(approach, (str, type(None))):
+                approach = None
+            embedding_model = ml_data.get('embedding_model')
+            if not isinstance(embedding_model, (str, type(None))):
+                embedding_model = None
+            embedding_vector = ml_data.get('embedding_vector')
+            if not isinstance(embedding_vector, (bytes, type(None))):
+                embedding_vector = None
+            extraction_confidence = ml_data.get('extraction_confidence', 0.5)
+            if not isinstance(extraction_confidence, (int, float)):
+                extraction_confidence = 0.5
+            # Check if discovery already exists for this version
+            cursor.execute("""
+                SELECT id FROM ml_discoveries 
+                WHERE post_id = ? AND model_version = ?
+            """, (post_id, model_version))
+            exists = cursor.fetchone()
+            if exists:
+                # Update existing discovery
+                cursor.execute("""
+                    UPDATE ml_discoveries
+                    SET 
+                        pipeline_type = ?,
+                        processed_at = ?,
+                        layers = ?,
+                        tech_stack = ?,
+                        patterns = ?,
+                        solutions = ?,
+                        problem = ?,
+                        approach = ?,
+                        embedding_model = ?,
+                        embedding_vector = ?,
+                        extraction_confidence = ?
+                    WHERE post_id = ? AND model_version = ?
+                """, (
+                    pipeline_type,
+                    now_unix,
+                    layers_json,
+                    tech_stack_json,
+                    patterns_json,
+                    solutions_json,
+                    problem,
+                    approach,
+                    embedding_model,
+                    embedding_vector,
+                    extraction_confidence,
+                    post_id,
+                    model_version
+                ))
+            else:
+                # Insert new discovery
+                cursor.execute("""
+                    INSERT INTO ml_discoveries (
+                        post_id, model_version, pipeline_type, processed_at,
+                        layers, tech_stack, patterns, solutions, problem, approach,
+                        embedding_model, embedding_vector, extraction_confidence
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    post_id,
+                    model_version,
+                    pipeline_type,
+                    now_unix,
+                    layers_json,
+                    tech_stack_json,
+                    patterns_json,
+                    solutions_json,
+                    problem,
+                    approach,
+                    embedding_model,
+                    embedding_vector,
+                    extraction_confidence
+                ))
     
+    @with_sqlite_retry()
     def get_posts_needing_ml_classification(self, model_version: str = 'legacy-v1') -> List[Dict]:
         """Get posts with content but not yet classified by specified model version"""
         with self._get_connection() as conn:
@@ -620,6 +651,7 @@ class PipelineDB:
             """, (model_version,))
             return [dict(row) for row in cursor.fetchall()]
     
+    @with_sqlite_retry()
     def get_ml_discovery(self, post_id: str, model_version: str = 'legacy-v1') -> Optional[Dict]:
         """Get ML discovery data for a specific post and model version"""
         with self._get_connection() as conn:
@@ -635,6 +667,7 @@ class PipelineDB:
     # Collection Runs
     # =========================================================================
     
+    @with_sqlite_retry()
     def start_collection_run(self, source: str, mode: str) -> int:
         """Start a new collection run, return run ID"""
         with self._get_connection() as conn:
@@ -645,6 +678,7 @@ class PipelineDB:
             """, (source, datetime.utcnow().isoformat(), mode))
             return cursor.lastrowid
     
+    @with_sqlite_retry()
     def complete_collection_run(self, run_id: int, posts_collected: int, 
                                posts_new: int, posts_updated: int, 
                                status: str = 'completed', error: str = None) -> None:
@@ -660,6 +694,7 @@ class PipelineDB:
             """, (datetime.utcnow().isoformat(), status, posts_collected, 
                  posts_new, posts_updated, error, run_id))
     
+    @with_sqlite_retry()
     def get_last_collection_run(self, source: str) -> Optional[Dict]:
         """Get last collection run for a source"""
         with self._get_connection() as conn:
@@ -677,6 +712,7 @@ class PipelineDB:
     # Statistics
     # =========================================================================
     
+    @with_sqlite_retry()
     def get_stats(self) -> Dict:
         """Get overall statistics"""
         with self._get_connection() as conn:
@@ -725,6 +761,7 @@ class PipelineDB:
     # Cache
     # =========================================================================
     
+    @with_sqlite_retry()
     def cache_set(self, key: str, value: Any, ttl_seconds: Optional[int] = None) -> None:
         """Set cache value"""
         now = datetime.utcnow()
@@ -740,6 +777,7 @@ class PipelineDB:
                 VALUES (?, ?, ?, ?)
             """, (key, json.dumps(value), now.isoformat(), expires_at))
     
+    @with_sqlite_retry()
     def cache_get(self, key: str) -> Optional[Any]:
         """Get cache value"""
         with self._get_connection() as conn:
@@ -762,6 +800,7 @@ class PipelineDB:
             
             return json.loads(row['value'])
     
+    @with_sqlite_retry()
     def cache_delete(self, key: str) -> None:
         """Delete cache entry"""
         with self._get_connection() as conn:
@@ -772,6 +811,7 @@ class PipelineDB:
     # Content Retrieval Methods
     # =========================================================================
     
+    @with_sqlite_retry()
     def get_post_content(self, post_id: str, format: str = 'markdown') -> Optional[str]:
         """
         Get post content in specified format
@@ -798,6 +838,7 @@ class PipelineDB:
             row = cursor.fetchone()
             return row[0] if row else None
     
+    @with_sqlite_retry()
     def get_posts_with_content(self, source: Optional[str] = None, 
                                limit: Optional[int] = None) -> List[Dict]:
         """Get posts that have markdown content stored"""
@@ -823,6 +864,7 @@ class PipelineDB:
             cursor.execute(query, params)
             return [dict(row) for row in cursor.fetchall()]
     
+    @with_sqlite_retry()
     def get_posts_needing_ml(self, source: Optional[str] = None,
                             limit: Optional[int] = None,
                             model_version: Optional[str] = None) -> List[Dict]:
@@ -870,6 +912,7 @@ class PipelineDB:
             cursor.execute(query, params)
             return [dict(row) for row in cursor.fetchall()]
     
+    @with_sqlite_retry()
     def search_content(self, query: str, limit: int = 50) -> List[Dict]:
         """
         Full-text search in post content using FTS5
@@ -901,6 +944,7 @@ class PipelineDB:
     # Authors Management
     # =========================================================================
     
+    @with_sqlite_retry()
     def get_author(self, author_id: str) -> Optional[Dict]:
         """Get author by ID"""
         with self._get_connection() as conn:
@@ -909,6 +953,7 @@ class PipelineDB:
             row = cursor.fetchone()
             return dict(row) if row else None
     
+    @with_sqlite_retry()
     def get_top_authors(self, limit: int = 10, technical_only: bool = False) -> List[Dict]:
         """Get top authors by post count"""
         with self._get_connection() as conn:
@@ -924,6 +969,7 @@ class PipelineDB:
             
             return [dict(row) for row in cursor.fetchall()]
     
+    @with_sqlite_retry()
     def update_author_stats(self) -> None:
         """Recalculate author statistics from posts"""
         with self._get_connection() as conn:
