@@ -507,10 +507,7 @@ def _get_ml_classified_posts(
                 md.patterns,
                 md.solutions,
                 md.problem,
-                md.approach,
-                md.model_version,
-                md.pipeline_type,
-                md.discovered_at as ml_discovered_at
+                md.approach
             FROM posts p
             INNER JOIN (
                 SELECT 
@@ -520,23 +517,9 @@ def _get_ml_classified_posts(
                     patterns,
                     solutions,
                     problem,
-                    approach,
-                    model_version,
-                    pipeline_type,
-                    discovered_at,
-                    ROW_NUMBER() OVER (
-                        PARTITION BY post_id 
-                        ORDER BY 
-                            CASE model_version
-                                WHEN 'modern-llm-v1' THEN 1
-                                WHEN 'modern-v1' THEN 2
-                                WHEN 'legacy-v1' THEN 3
-                                ELSE 4
-                            END,
-                            discovered_at DESC
-                    ) as rn
+                    approach
                 FROM ml_discoveries
-            ) md ON p.id = md.post_id AND md.rn = 1
+            ) md ON p.id = md.post_id
             WHERE p.source = ? 
             AND p.content_markdown IS NOT NULL
         """
