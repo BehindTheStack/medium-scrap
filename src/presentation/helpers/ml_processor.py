@@ -30,7 +30,6 @@ from rich.console import Console
 
 from .progress_display import ProgressDisplay
 from .text_cleaner import clean_markdown
-from ...ml_classifier.tech_extractor import PATTERN_TO_LAYER
 
 
 class MLProcessor:
@@ -781,7 +780,6 @@ class ModernMLProcessor:
             self.load_models(use_llm=use_llm)
         
         from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeElapsedColumn
-        from tech_extractor import extraction_to_dict
         
         total_posts = len(entries)
         
@@ -874,10 +872,13 @@ class ModernMLProcessor:
         # Map patterns to layers (aligned with tech_extractor.py 28 patterns)
         # Categories: Distributed Systems, Backend & APIs, Cloud Infrastructure,
         #             Performance & Resilience, Observability, Data Infrastructure, ML/AI Platform
+        
+        
+        from ...ml_classifier.tech_extractor import PatternClassifier
         layers = []
         for p in patterns:
             pattern_name = p.name if hasattr(p, 'name') else p.get('pattern', '')
-            layer = PATTERN_TO_LAYER.get(pattern_name)
+            layer = PatternClassifier.PATTERN_TO_LAYER.get(pattern_name)
             if layer and layer not in layers:
                 layers.append(layer)
         
