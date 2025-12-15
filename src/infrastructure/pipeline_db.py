@@ -18,6 +18,10 @@ def with_sqlite_retry(
     Decorator para retry automático em erros 'database is locked' do SQLite.
     Usa backoff exponencial + jitter.
     """
+    
+    import time
+    import random
+    from functools import wraps
 
     def decorator(func):
         @wraps(func)
@@ -31,7 +35,7 @@ def with_sqlite_retry(
                 except sqlite3.OperationalError as e:
                     msg = str(e).lower()
 
-                    if "database is locked" in msg or "database is busy" in msg:
+                    if any(x in msg for x in ["database is locked", "database is busy", "unable to open database file"]):
                         if attempt >= max_retries - 1:
                             raise
 
@@ -42,7 +46,7 @@ def with_sqlite_retry(
                         delay *= 2
                         continue
 
-                    raise  # outro erro operacional não relacionado
+                    raise
 
         return wrapper
 
