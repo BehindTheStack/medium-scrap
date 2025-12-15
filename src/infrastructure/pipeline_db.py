@@ -505,100 +505,108 @@ class PipelineDB:
             model_version: Version identifier (e.g., 'modern-v1', 'legacy-v1')
             pipeline_type: Type of pipeline ('legacy', 'modern', 'modern-llm')
         """
-        now_unix = int(datetime.utcnow().timestamp())
+        import time
         
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            
-            # Serialize JSON fields (always convert to JSON string)
-            layers_json = json.dumps(ml_data.get('layers', []))
-            tech_stack_json = json.dumps(ml_data.get('tech_stack', []))
-            patterns_json = json.dumps(ml_data.get('patterns', []))
-            solutions_json = json.dumps(ml_data.get('solutions', []))
-            
-            # Sanitize scalar fields - ensure they're the correct type
-            problem = ml_data.get('problem')
-            if not isinstance(problem, (str, type(None))):
-                problem = None
-            
-            approach = ml_data.get('approach')
-            if not isinstance(approach, (str, type(None))):
-                approach = None
-            
-            embedding_model = ml_data.get('embedding_model')
-            if not isinstance(embedding_model, (str, type(None))):
-                embedding_model = None
-            
-            embedding_vector = ml_data.get('embedding_vector')
-            if not isinstance(embedding_vector, (bytes, type(None))):
-                embedding_vector = None
-            
-            extraction_confidence = ml_data.get('extraction_confidence', 0.5)
-            if not isinstance(extraction_confidence, (int, float)):
-                extraction_confidence = 0.5
-            
-            # Check if discovery already exists for this version
-            cursor.execute("""
-                SELECT id FROM ml_discoveries 
-                WHERE post_id = ? AND model_version = ?
-            """, (post_id, model_version))
-            exists = cursor.fetchone()
-            
-            if exists:
-                # Update existing discovery
-                cursor.execute("""
-                    UPDATE ml_discoveries
-                    SET 
-                        pipeline_type = ?,
-                        processed_at = ?,
-                        layers = ?,
-                        tech_stack = ?,
-                        patterns = ?,
-                        solutions = ?,
-                        problem = ?,
-                        approach = ?,
-                        embedding_model = ?,
-                        embedding_vector = ?,
-                        extraction_confidence = ?
-                    WHERE post_id = ? AND model_version = ?
-                """, (
-                    pipeline_type,
-                    now_unix,
-                    layers_json,
-                    tech_stack_json,
-                    patterns_json,
-                    solutions_json,
-                    problem,
-                    approach,
-                    embedding_model,
-                    embedding_vector,
-                    extraction_confidence,
-                    post_id,
-                    model_version
-                ))
-            else:
-                # Insert new discovery
-                cursor.execute("""
-                    INSERT INTO ml_discoveries (
-                        post_id, model_version, pipeline_type, processed_at,
-                        layers, tech_stack, patterns, solutions, problem, approach,
-                        embedding_model, embedding_vector, extraction_confidence
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    post_id,
-                    model_version,
-                    pipeline_type,
-                    now_unix,
-                    layers_json,
-                    tech_stack_json,
-                    patterns_json,
-                    solutions_json,
-                    problem,
-                    approach,
-                    embedding_model,
-                    embedding_vector,
-                    extraction_confidence
-                ))
+        now_unix = int(datetime.utcnow().timestamp())
+        max_retries = 12
+        delay = 0.5
+        for attempt in range(max_retries):
+            try:
+                with self._get_connection() as conn:
+                    cursor = conn.cursor()
+                    # Serialize JSON fields (always convert to JSON string)
+                    layers_json = json.dumps(ml_data.get('layers', []))
+                    tech_stack_json = json.dumps(ml_data.get('tech_stack', []))
+                    patterns_json = json.dumps(ml_data.get('patterns', []))
+                    solutions_json = json.dumps(ml_data.get('solutions', []))
+                    # Sanitize scalar fields - ensure they're the correct type
+                    problem = ml_data.get('problem')
+                    if not isinstance(problem, (str, type(None))):
+                        problem = None
+                    approach = ml_data.get('approach')
+                    if not isinstance(approach, (str, type(None))):
+                        approach = None
+                    embedding_model = ml_data.get('embedding_model')
+                    if not isinstance(embedding_model, (str, type(None))):
+                        embedding_model = None
+                    embedding_vector = ml_data.get('embedding_vector')
+                    if not isinstance(embedding_vector, (bytes, type(None))):
+                        embedding_vector = None
+                    extraction_confidence = ml_data.get('extraction_confidence', 0.5)
+                    if not isinstance(extraction_confidence, (int, float)):
+                        extraction_confidence = 0.5
+                    # Check if discovery already exists for this version
+                    cursor.execute("""
+                        SELECT id FROM ml_discoveries 
+                        WHERE post_id = ? AND model_version = ?
+                    """, (post_id, model_version))
+                    exists = cursor.fetchone()
+                    if exists:
+                        # Update existing discovery
+                        cursor.execute("""
+                            UPDATE ml_discoveries
+                            SET 
+                                pipeline_type = ?,
+                                processed_at = ?,
+                                layers = ?,
+                                tech_stack = ?,
+                                patterns = ?,
+                                solutions = ?,
+                                problem = ?,
+                                approach = ?,
+                                embedding_model = ?,
+                                embedding_vector = ?,
+                                extraction_confidence = ?
+                            WHERE post_id = ? AND model_version = ?
+                        """, (
+                            pipeline_type,
+                            now_unix,
+                            layers_json,
+                            tech_stack_json,
+                            patterns_json,
+                            solutions_json,
+                            problem,
+                            approach,
+                            embedding_model,
+                            embedding_vector,
+                            extraction_confidence,
+                            post_id,
+                            model_version
+                        ))
+                    else:
+                        # Insert new discovery
+                        cursor.execute("""
+                            INSERT INTO ml_discoveries (
+                                post_id, model_version, pipeline_type, processed_at,
+                                layers, tech_stack, patterns, solutions, problem, approach,
+                                embedding_model, embedding_vector, extraction_confidence
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """, (
+                            post_id,
+                            model_version,
+                            pipeline_type,
+                            now_unix,
+                            layers_json,
+                            tech_stack_json,
+                            patterns_json,
+                            solutions_json,
+                            problem,
+                            approach,
+                            embedding_model,
+                            embedding_vector,
+                            extraction_confidence
+                        ))
+                break  # Success, exit retry loop
+            except sqlite3.OperationalError as e:
+                if 'database is locked' in str(e):
+                    if attempt < max_retries - 1:
+                        time.sleep(delay)
+                        delay *= 2  # Exponential backoff
+                        continue
+                    else:
+                        raise
+                else:
+                    raise
     
     def get_posts_needing_ml_classification(self, model_version: str = 'legacy-v1') -> List[Dict]:
         """Get posts with content but not yet classified by specified model version"""
